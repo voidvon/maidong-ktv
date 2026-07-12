@@ -1,6 +1,6 @@
 # Maidong KTV database
 
-`muse.db` is published as 80 MiB chunks because the complete database is
+`muse.db` is published as 10 MiB chunks because the complete database is
 969,072,640 bytes. The Android client downloads `manifest.json`, appends each
 chunk in order, verifies the final size and SHA-256, then atomically installs
 the database.
@@ -18,7 +18,7 @@ database/manifest.json
 database/muse.db.part000
 database/muse.db.part001
 ...
-database/muse.db.part011
+database/muse.db.part092
 ```
 
 The unsplit `muse.db` is intentionally excluded from Git.
