@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.TextView
 import android.widget.Switch
 
@@ -23,8 +24,12 @@ data class SettingsEntry(
 class SettingsListAdapter(
     private val context: Context,
     private val entries: List<SettingsEntry>,
+    private val topFocusId: Int = View.NO_ID,
 ) : BaseAdapter() {
     private val density = context.resources.displayMetrics.density
+    private val actionIds = IntArray(entries.size) { View.generateViewId() }
+    val firstActionId: Int
+        get() = actionIds.firstOrNull() ?: View.NO_ID
 
     override fun getCount(): Int = entries.size
     override fun getItem(position: Int): Any = entries[position]
@@ -37,8 +42,9 @@ class SettingsListAdapter(
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), 0, dp(20), 0)
             setBackgroundResource(R.drawable.ott_bg_item)
-            isFocusable = entry.checked == null
-            isClickable = entry.checked == null
+            isFocusable = false
+            isClickable = false
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
 
             addView(ImageView(context).apply {
                 setImageResource(entry.icon)
@@ -56,29 +62,59 @@ class SettingsListAdapter(
 
             if (entry.checked != null) {
                 addView(Switch(context).apply {
+                    id = actionIds[position]
+                    nextFocusUpId = if (position == 0 && topFocusId != View.NO_ID) {
+                        topFocusId
+                    } else {
+                        actionIds[(position - 1).coerceAtLeast(0)]
+                    }
+                    nextFocusDownId = actionIds[(position + 1).coerceAtMost(entries.lastIndex)]
                     isChecked = entry.checked
                     showText = false
+                    contentDescription = "focus:settings:${entry.title}"
                     isFocusable = true
-                    setOnClickListener { entry.action() }
+                    isFocusableInTouchMode = false
+                    setOnClickListener {
+                        entry.action()
+                        post { requestFocus() }
+                    }
+                    TvFocusStyler.install(this)
                 }, LinearLayout.LayoutParams(dp(70), dp(42)))
             } else {
                 addView(label(entry.actionText, 16, Color.WHITE).apply {
+                    id = actionIds[position]
+                    nextFocusUpId = if (position == 0 && topFocusId != View.NO_ID) {
+                        topFocusId
+                    } else {
+                        actionIds[(position - 1).coerceAtLeast(0)]
+                    }
+                    nextFocusDownId = actionIds[(position + 1).coerceAtMost(entries.lastIndex)]
+                    contentDescription = "focus:settings:${entry.title}"
                     gravity = Gravity.CENTER
                     setBackgroundResource(R.drawable.bg_btn_glass)
-                    isFocusable = false
-                    isClickable = false
+                    isFocusable = true
+                    isFocusableInTouchMode = false
+                    isClickable = true
+                    setOnClickListener { entry.action() }
+                    TvFocusStyler.install(this)
                 }, LinearLayout.LayoutParams(dp(130), dp(33)))
             }
+        }
+    }
 
-            if (entry.checked == null) setOnClickListener { entry.action() }
-            onFocusChangeListener = View.OnFocusChangeListener { view, focused ->
-                view.animate()
-                    .scaleX(if (focused) 1.015f else 1f)
-                    .scaleY(if (focused) 1.015f else 1f)
-                    .alpha(if (focused) 1f else 0.96f)
-                    .setDuration(100L)
-                    .start()
-                view.isSelected = focused
+    fun requestInitialFocus(list: ListView, onTargetReady: (View) -> Unit = {}) {
+        list.itemsCanFocus = true
+        list.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        list.setSelection(0)
+        list.post {
+            val firstRow = list.getChildAt(0) as? ViewGroup
+            firstRow?.getChildAt(firstRow.childCount - 1)?.let {
+                onTargetReady(it)
+                if (it.requestFocus() || it.requestFocusFromTouch()) {
+                    it.refreshDrawableState()
+                    it.jumpDrawablesToCurrentState()
+                    it.invalidate()
+                }
             }
         }
     }

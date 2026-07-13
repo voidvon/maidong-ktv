@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.util.AttributeSet
+import android.util.Log
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -99,6 +100,10 @@ private class KtvSurfaceView(context: Context) : SurfaceView(context) {
 }
 
 class KtvPlaybackEngine(context: Context) {
+    private companion object {
+        const val TAG = "KtvPlaybackEngine"
+    }
+
     private var ijkPlayer: IjkMediaPlayer? = null
     private var targetView: KtvVideoView? = null
     private var prepared = false
@@ -138,13 +143,17 @@ class KtvPlaybackEngine(context: Context) {
         view.updateVideoSize(videoWidth, videoHeight)
         view.installSurfaceCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                if (targetView === view) setOutputHolder(holder)
+                if (targetView === view) {
+                    Log.i(TAG, "surfaceCreated valid=${holder.surface?.isValid == true}")
+                    setOutputHolder(holder)
+                }
             }
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 if (targetView === view) {
+                    Log.i(TAG, "surfaceDestroyed")
                     runCatching { ijkPlayer?.setDisplay(null) }
                 }
             }
@@ -155,17 +164,18 @@ class KtvPlaybackEngine(context: Context) {
     fun setVideoUri(uri: Uri) {
         prepared = false
         startWhenPrepared = false
+        Log.i(TAG, "setVideoUri uri=$uri surface=${targetView?.currentHolder()?.surface?.isValid == true}")
         val ijk = ensureIjkPlayer()
         if (ijk != null) {
             val firstAttempt = runCatching { prepareIjkPlayer(ijk, uri) }
             if (firstAttempt.isFailure) {
-                android.util.Log.e("KtvPlaybackEngine", "IJK prepare failed; recreating player", firstAttempt.exceptionOrNull())
+                Log.e(TAG, "IJK prepare failed; recreating player", firstAttempt.exceptionOrNull())
                 releaseIjk()
                 val retry = ensureIjkPlayer()
                 val retryAttempt = retry?.let { runCatching { prepareIjkPlayer(it, uri) } }
                 if (retryAttempt == null || retryAttempt.isFailure) {
-                    android.util.Log.e(
-                        "KtvPlaybackEngine",
+                    Log.e(
+                        TAG,
                         "IJK recreate failed; platform fallback is disabled",
                         retryAttempt?.exceptionOrNull(),
                     )
@@ -175,7 +185,7 @@ class KtvPlaybackEngine(context: Context) {
             }
         } else {
             prepared = false
-            android.util.Log.e("KtvPlaybackEngine", "IJK unavailable; platform fallback is disabled")
+            Log.e(TAG, "IJK unavailable; platform fallback is disabled")
             errorListener?.onError(null, MediaPlayer.MEDIA_ERROR_UNKNOWN, 0)
         }
     }
@@ -184,12 +194,8 @@ class KtvPlaybackEngine(context: Context) {
         player.reset()
         configure(player)
         targetView?.currentHolder()?.takeIf { it.surface?.isValid == true }?.let(player::setDisplay)
-        val rawSource = if (uri.scheme.equals("file", true)) uri.path.orEmpty() else uri.toString()
-        val source = rawSource.takeIf { uri.scheme.isNullOrEmpty() || uri.scheme.equals("file", true) }
-            ?.let { java.io.File(it) }
-            ?.takeIf { it.exists() }
-            ?.let(ThunderLocalProxy::urlFor)
-            ?: rawSource
+        val source = if (uri.scheme.equals("file", true)) uri.path.orEmpty() else uri.toString()
+        Log.i(TAG, "prepare source=$source surface=${targetView?.currentHolder()?.surface?.isValid == true}")
         player.setDataSource(source)
         player.prepareAsync()
     }
@@ -197,8 +203,10 @@ class KtvPlaybackEngine(context: Context) {
     fun start() {
         if (!prepared) {
             startWhenPrepared = true
+            Log.i(TAG, "start deferred until prepared")
             return
         }
+        Log.i(TAG, "start prepared player")
         runCatching { ijkPlayer?.start() }
     }
 
@@ -267,8 +275,17 @@ class KtvPlaybackEngine(context: Context) {
 
     private fun ensureIjkPlayer(): IjkMediaPlayer? {
         ijkPlayer?.let { return it }
-        return runCatching { IjkMediaPlayer().also { ijkPlayer = it } }
-            .onFailure { android.util.Log.e("KtvPlaybackEngine", "Cannot create IJK player", it) }
+        return runCatching {
+            IjkMediaPlayer().also {
+                ijkPlayer = it
+                com.local.ktv.AppPaths.removeNativeLegacyLogDirectory()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                    { com.local.ktv.AppPaths.removeNativeLegacyLogDirectory() },
+                    1_500L,
+                )
+            }
+        }
+            .onFailure { Log.e(TAG, "Cannot create IJK player", it) }
             .getOrNull()
     }
 
@@ -296,8 +313,12 @@ class KtvPlaybackEngine(context: Context) {
             videoWidth = preparedPlayer.videoWidth
             videoHeight = preparedPlayer.videoHeight
             targetView?.updateVideoSize(videoWidth, videoHeight)
+            Log.i(TAG, "onPrepared size=${videoWidth}x$videoHeight deferred=$startWhenPrepared")
             preparedListener?.onPrepared(null)
-            if (startWhenPrepared && !preparedPlayer.isPlaying) runCatching { preparedPlayer.start() }
+            if (startWhenPrepared && !preparedPlayer.isPlaying) {
+                Log.i(TAG, "starting deferred player")
+                runCatching { preparedPlayer.start() }
+            }
         }
         player.setOnVideoSizeChangedListener { _, width, height, _, _ ->
             videoWidth = width
@@ -307,11 +328,13 @@ class KtvPlaybackEngine(context: Context) {
         player.setOnCompletionListener { completionListener?.onCompletion(null) }
         player.setOnErrorListener { _, what, extra ->
             prepared = false
+            Log.e(TAG, "onError what=$what extra=$extra")
             errorListener?.onError(null, what, extra) ?: true
         }
     }
 
     private fun setOutputHolder(holder: SurfaceHolder) {
+        Log.i(TAG, "setOutputHolder valid=${holder.surface?.isValid == true}")
         runCatching { ijkPlayer?.setDisplay(holder) }
     }
 

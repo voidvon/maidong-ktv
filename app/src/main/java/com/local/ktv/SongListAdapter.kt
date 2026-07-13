@@ -55,10 +55,13 @@ class SongListAdapter(
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            val cells = mutableListOf<View>()
             repeat(2) { column ->
                 val index = position * 2 + column
+                val cell = songs.getOrNull(index)?.let { createCatalogCell(it) } ?: View(context)
+                cells += cell
                 addView(
-                    songs.getOrNull(index)?.let { createCatalogCell(it) } ?: View(context),
+                    cell,
                     LinearLayout.LayoutParams(0, dp(60), 1f),
                 )
             }
@@ -83,14 +86,10 @@ class SongListAdapter(
             val info = songInfo(song, stacked = true)
             addView(info, LinearLayout.LayoutParams(0, dp(52), 1f))
             if (!state.local || state.queued) {
-                addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download) {
-                    if (!state.queued) callbacks.onDownload(song)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download, null), LinearLayout.LayoutParams(dp(40), dp(40)))
             }
-            addView(icon(R.drawable.ott_ic_more) { callbacks.onMore(song) }, LinearLayout.LayoutParams(dp(40), dp(40)))
-            installPressAnimation(this)
-            isFocusable = true
-            setOnClickListener { callbacks.onPrimary(song) }
+            addView(icon(R.drawable.ott_ic_more, null), LinearLayout.LayoutParams(dp(40), dp(40)))
+            configureSongCard(this, song)
         }
     }
 
@@ -112,14 +111,10 @@ class SongListAdapter(
             addView(badge, LinearLayout.LayoutParams(dp(47), dp(48)))
             addView(songInfo(song, stacked = false), LinearLayout.LayoutParams(0, dp(48), 1f))
             if (!state.local || state.queued) {
-                addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download) {
-                    if (!state.queued) callbacks.onDownload(song)
-                }, LinearLayout.LayoutParams(dp(40), dp(40)))
+                addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download, null), LinearLayout.LayoutParams(dp(40), dp(40)))
             }
-            addView(icon(R.drawable.ott_ic_more) { callbacks.onMore(song) }, LinearLayout.LayoutParams(dp(40), dp(40)))
-            installPressAnimation(this)
-            isFocusable = true
-            setOnClickListener { callbacks.onPrimary(song) }
+            addView(icon(R.drawable.ott_ic_more, null), LinearLayout.LayoutParams(dp(40), dp(40)))
+            configureSongCard(this, song)
         }
     }
 
@@ -139,9 +134,7 @@ class SongListAdapter(
                 addView(icon(R.drawable.ic_add_to_top) { callbacks.onTop(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
                 addView(icon(R.drawable.ic_delete) { callbacks.onDelete(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
             }
-            installPressAnimation(this)
-            isFocusable = true
-            setOnClickListener { callbacks.onPrimary(song) }
+            configureSongCard(this, song)
         }
     }
 
@@ -175,9 +168,7 @@ class SongListAdapter(
                 )
             }
             addView(icon(R.drawable.ic_delete) { callbacks.onDelete(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-            installPressAnimation(this)
-            isFocusable = true
-            setOnClickListener { callbacks.onPrimary(song) }
+            configureSongCard(this, song)
         }
     }
 
@@ -188,9 +179,7 @@ class SongListAdapter(
         addView(text((index + 1).toString(), 16, Color.WHITE, Gravity.CENTER), LinearLayout.LayoutParams(dp(47), dp(48)))
         addView(songInfo(song, stacked = false), LinearLayout.LayoutParams(0, dp(48), 1f))
         addView(icon(R.drawable.ic_order_song) { callbacks.onPrimary(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-        installPressAnimation(this)
-        isFocusable = true
-        setOnClickListener { callbacks.onPrimary(song) }
+        configureSongCard(this, song)
     }
 
     private fun songInfo(song: Song, stacked: Boolean): View = LinearLayout(context).apply {
@@ -221,12 +210,26 @@ class SongListAdapter(
         isFocusable = action != null
         isClickable = action != null
         action?.let { callback ->
+            id = View.generateViewId()
             installPressAnimation(this)
             setOnClickListener { callback() }
         }
     }
 
+    private fun configureSongCard(card: View, song: Song) {
+        if (card.id == View.NO_ID) card.id = View.generateViewId()
+        card.contentDescription = "focus:song:${song.id ?: song.dbId ?: song.filename ?: "${song.title}|${song.singer}"}"
+        (card as? ViewGroup)?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        installPressAnimation(card)
+        card.setOnClickListener { callbacks.onPrimary(song) }
+        card.setOnLongClickListener { callbacks.onMore(song); true }
+    }
+
     private fun installPressAnimation(view: View) {
+        view.isFocusable = true
+        view.isFocusableInTouchMode = false
+        view.isClickable = true
+        TvFocusStyler.install(view)
         view.setOnTouchListener { target, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> target.animate().scaleX(0.96f).scaleY(0.96f).alpha(0.82f).setDuration(80L).start()
@@ -234,15 +237,6 @@ class SongListAdapter(
                     target.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(120L).start()
             }
             false
-        }
-        view.onFocusChangeListener = View.OnFocusChangeListener { target, focused ->
-            target.animate()
-                .scaleX(if (focused) 1.025f else 1f)
-                .scaleY(if (focused) 1.025f else 1f)
-                .alpha(if (focused) 1f else 0.96f)
-                .setDuration(100L)
-                .start()
-            target.isSelected = focused
         }
     }
 

@@ -1,14 +1,13 @@
 package com.local.ktv
 
-import android.os.Environment
 import org.json.JSONArray
 import java.io.File
 import java.util.Locale
 
 class SongLibrary {
-    @JvmField val rootDir = File(Environment.getExternalStorageDirectory(), "LocalKTV/songs")
-    @JvmField val importDir = File(Environment.getExternalStorageDirectory(), "LocalKTV/import")
-    private val indexFile = File(Environment.getExternalStorageDirectory(), "LocalKTV/catalog.json")
+    @JvmField val rootDir = AppPaths.songsDir
+    @JvmField val importDir = AppPaths.importDir
+    private val indexFile = AppPaths.catalogFile
     private val localSongs = mutableListOf<Song>()
     private val remoteSongs = mutableListOf<Song>()
     @JvmField val muse = MuseDatabase()

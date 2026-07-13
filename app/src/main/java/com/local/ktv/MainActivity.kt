@@ -94,6 +94,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
+import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -197,6 +198,23 @@ class MainActivity : AppCompatActivity() {
     private var recorder: MediaRecorder? = null
     private var currentRecording: File? = null
     private var currentPage = "首页"
+
+    private data class FocusBookmark(
+        val resourceName: String?,
+        val marker: String?,
+        val text: String?,
+        val groupText: String?,
+    )
+
+    private data class FocusReturnPoint(
+        val restorePage: () -> Unit,
+        val focus: FocusBookmark?,
+        val directFocus: View?,
+    )
+
+    private val focusReturnStack = ArrayDeque<FocusReturnPoint>()
+    private var restoringFocusRoute = false
+    private var focusRestoreSerial = 0
 
     /** 导航按钮列表,用于维护选中态视觉  */
     private val navButtons: MutableList<TextView> = ArrayList<TextView>()
@@ -339,6 +357,11 @@ class MainActivity : AppCompatActivity() {
         )
         // 使用新的横屏TV布局
         setContentView(R.layout.activity_main)
+        if (!hasStoragePermission()) {
+            requestStorage()
+            return
+        }
+        AppPaths.ensureDirectories()
         store.load()
         loadStateFromStore()
         stateDatabase = KtvStateDatabase(applicationContext)
@@ -374,7 +397,6 @@ class MainActivity : AppCompatActivity() {
         }
         applyScreenBrightness()
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager?
-        requestStorage()
         // 初始化 API 客户端 (歌曲下载链接)
         init("abe235a87118f6de", "080027deed4f")
         playbackEngine = KtvPlaybackEngine(applicationContext)
@@ -755,7 +777,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun showSearch() {
         showSongs("全部")
-        search!!.requestFocus()
     }
 
     fun showSongs(category: String?) {
@@ -1296,7 +1317,7 @@ class MainActivity : AppCompatActivity() {
         panel.addView(sectionTitle("本地导入"))
         panel.addView(
             label(
-                "请把歌曲放入 /sdcard/LocalKTV/import、/sdcard/LocalKTV/songs、U盘/KTV 或 U盘/songs，支持 mp4/mkv/avi/mp3/flac/wav。",
+                "请把歌曲放入 /sdcard/MaidongKTV/import、/sdcard/MaidongKTV/songs、U盘/KTV 或 U盘/songs，支持 mp4/mkv/avi/mp3/flac/wav。",
                 20,
                 Color.LTGRAY
             )
@@ -1326,6 +1347,55 @@ class MainActivity : AppCompatActivity() {
     /**
      * 退出确认弹窗(对齐原app风格)
      */
+    private fun AlertDialog.showForTv(
+        preferredButton: Int = DialogInterface.BUTTON_NEGATIVE,
+        afterShow: (() -> Unit)? = null,
+    ): AlertDialog {
+        val sourcePage = currentPage
+        val sourceView = this@MainActivity.window.decorView.findFocus()
+        val sourceFocus = captureFocusBookmark(sourceView)
+        setOnShowListener {
+            listView?.apply {
+                setSelector(R.drawable.bg_tv_dialog_choice_focus)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    defaultFocusHighlightEnabled = false
+                }
+            }
+            window?.decorView?.let(TvFocusStyler::installTree)
+            val preferred = getButton(preferredButton)
+                ?: getButton(DialogInterface.BUTTON_NEGATIVE)
+                ?: getButton(DialogInterface.BUTTON_POSITIVE)
+            preferred?.let {
+                if (it.requestFocus() || it.requestFocusFromTouch()) {
+                    it.refreshDrawableState()
+                    it.jumpDrawablesToCurrentState()
+                    it.invalidate()
+                }
+            }
+            afterShow?.invoke()
+        }
+        setOnDismissListener {
+            if (currentPage == sourcePage) restoreFocusBookmark(sourceFocus, sourceView)
+        }
+        show()
+        return this
+    }
+
+    private fun AlertDialog.Builder.showForTv(
+        preferredButton: Int = DialogInterface.BUTTON_NEGATIVE,
+        afterShow: (() -> Unit)? = null,
+    ): AlertDialog = create().showForTv(preferredButton, afterShow)
+
+    private fun AlertDialog.restoreSourceFocusOnDismiss(): AlertDialog {
+        val sourcePage = currentPage
+        val sourceView = this@MainActivity.window.decorView.findFocus()
+        val sourceFocus = captureFocusBookmark(sourceView)
+        setOnDismissListener {
+            if (currentPage == sourcePage) restoreFocusBookmark(sourceFocus, sourceView)
+        }
+        return this
+    }
+
     private fun showExitDialog() {
         AlertDialog.Builder(this)
             .setTitle("退出确认")
@@ -1334,7 +1404,8 @@ class MainActivity : AppCompatActivity() {
                 "确定退出",
                 DialogInterface.OnClickListener { d: DialogInterface?, w: Int -> finish() })
             .setNegativeButton("取消", null)
-            .show()
+            .create()
+            .showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     /** 顶栏/键盘相关 占位字段  */
@@ -1380,6 +1451,12 @@ class MainActivity : AppCompatActivity() {
             dialog.getWindow()!!.setBackgroundDrawableResource(android.R.color.transparent)
         }
         btnClose.setOnClickListener(View.OnClickListener { v: View? -> dialog.dismiss() })
+        dialog.restoreSourceFocusOnDismiss()
+        dialog.setOnShowListener {
+            menu.post {
+                if (menu.childCount > 0) menu.getChildAt(0)?.requestFocus()
+            }
+        }
         dialog.show()
     }
 
@@ -1709,10 +1786,7 @@ class MainActivity : AppCompatActivity() {
      * 替换当前 MainFragment,并加入回退栈以便返回。
      */
     fun showFullScreenPlayer() {
-        if (currentSong == null) {
-            toast("请先点播一首歌曲")
-            return
-        }
+        if (player == null) player = videoBackground
         if (isFullScreen || player == null || fullScreenContainer == null) return
         playerReturnSurface = player
         playerReturnHost = activePlayerHost
@@ -1781,7 +1855,7 @@ class MainActivity : AppCompatActivity() {
             return caption to icon
         }
 
-        addControl(R.drawable.ic_return_order, "返回点歌") { exitFullScreenPlayer() }
+        addControl(R.drawable.ic_return_order, "返回") { exitFullScreenPlayer() }
         addControl(R.drawable.ott_ic_ctrl_orderlist, "已点") {
             exitFullScreenPlayer()
             showOrderListPage()
@@ -1892,7 +1966,11 @@ class MainActivity : AppCompatActivity() {
         fullScreenControls?.visibility = if (visible) View.VISIBLE else View.GONE
         fullScreenProgressRow?.visibility = if (visible) View.VISIBLE else View.GONE
         main.removeCallbacks(hideFullScreenChromeRunnable)
-        if (visible && isFullScreen) main.postDelayed(hideFullScreenChromeRunnable, 2500L)
+        if (visible && isFullScreen) {
+            val controls = fullScreenControls
+            if (controls != null && !controls.hasFocus()) controls.getChildAt(0)?.requestFocus()
+            main.postDelayed(hideFullScreenChromeRunnable, 5000L)
+        }
     }
 
     private fun updateFullScreenProgress() {
@@ -1973,7 +2051,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle("音量控制")
             .setView(box)
             .setNegativeButton("关闭", null)
-            .show()
+            .create()
+            .showForTv()
     }
 
     /**
@@ -2151,6 +2230,7 @@ class MainActivity : AppCompatActivity() {
             saveState()
             dialog.dismiss()
         })
+        dialog.restoreSourceFocusOnDismiss()
         dialog.show()
     }
 
@@ -2203,7 +2283,9 @@ class MainActivity : AppCompatActivity() {
                 dialog.getWindow()!!.setAttributes(params)
                 dialog.getWindow()!!.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             }
+            root.findViewById<View>(R.id.btn_tuning_close).requestFocus()
         })
+        dialog.restoreSourceFocusOnDismiss()
         dialog.show()
         return true
     }
@@ -2254,7 +2336,7 @@ class MainActivity : AppCompatActivity() {
                     saveState()
                     toast("气氛模式：" + atmosphere)
                 })
-            .show()
+            .create().showForTv()
     }
 
     private fun showPlayerStatusDialog() {
@@ -2278,7 +2360,7 @@ class MainActivity : AppCompatActivity() {
                 + "\n音画同步：" + audioDelayMs + "ms"
                 + "\n包房广播：" + (if (tableBroadcastEnabled) tableBroadcastText else "关闭"))
         AlertDialog.Builder(this).setTitle("播放状态").setMessage(message)
-            .setPositiveButton("确定", null).show()
+            .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun showStorageDialog() {
@@ -2291,7 +2373,7 @@ class MainActivity : AppCompatActivity() {
                 + "\n曲库总数：" + library.allSongs().size
                 + "\n下载任务：" + downloads.size)
         AlertDialog.Builder(this).setTitle("存储信息").setMessage(message)
-            .setPositiveButton("确定", null).show()
+            .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun showNetworkDialog() {
@@ -2309,7 +2391,7 @@ class MainActivity : AppCompatActivity() {
                 "同步曲库",
                 DialogInterface.OnClickListener { d: DialogInterface?, w: Int -> fetchCatalog() })
             .setNegativeButton("关闭", null)
-            .show()
+            .create().showForTv()
     }
 
 
@@ -2364,7 +2446,7 @@ class MainActivity : AppCompatActivity() {
         val adapter = tvAdapter()
         val apks = localApks()
         for (apk in apks) adapter.add(apk.getName() + "    " + formatSize(apk.length()))
-        if (adapter.isEmpty()) adapter.add("暂无 APK，请放入 /sdcard/LocalKTV/apps 或 U盘/apps")
+        if (adapter.isEmpty()) adapter.add("暂无 APK，请放入 /sdcard/MaidongKTV/apps 或 U盘/apps")
         list.setAdapter(adapter)
         list.setOnItemClickListener(OnItemClickListener { p: AdapterView<*>?, v: View?, pos: Int, id: Long ->
             if (pos >= 0 && pos < apks.size) installApk(apks.get(pos))
@@ -2540,7 +2622,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle("手机点歌")
             .setView(box)
             .setPositiveButton("确定", null)
-            .show()
+            .create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun startRemoteServer() {
@@ -2893,7 +2975,7 @@ class MainActivity : AppCompatActivity() {
                     saveState()
                 })
             .setNegativeButton("确定", null)
-            .show()
+            .create().showForTv()
     }
 
     private fun showRecordings() {
@@ -2972,7 +3054,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(
                 "素材列表",
                 DialogInterface.OnClickListener { d: DialogInterface?, w: Int -> showLocalMovies() })
-            .show()
+            .create().showForTv()
     }
 
     private fun showMarqueeSettings() {
@@ -3001,7 +3083,7 @@ class MainActivity : AppCompatActivity() {
                     marqueeEnabled = !marqueeEnabled
                     saveState()
                 })
-            .show()
+            .create().showForTv()
     }
 
     private fun showDisco() {
@@ -3054,7 +3136,7 @@ class MainActivity : AppCompatActivity() {
                     showLocalMovies()
                 })
         )
-        left.addView(label("目录：/sdcard/LocalKTV/movies 或 U盘/movies", 18, Color.LTGRAY))
+        left.addView(label("目录：/sdcard/MaidongKTV/movies 或 U盘/movies", 18, Color.LTGRAY))
 
         val right = panel()
         content!!.addView(right, LinearLayout.LayoutParams(0, -1, 1f))
@@ -3224,13 +3306,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun recordDir(): File {
-        return File(File(Environment.getExternalStorageDirectory(), "LocalKTV"), "records")
+        return AppPaths.recordsDir
     }
 
     private fun localMovies(): MutableList<File> {
         val out: MutableList<File> = ArrayList<File>()
         scanMovieDir(
-            File(File(Environment.getExternalStorageDirectory(), "LocalKTV"), "movies"),
+            AppPaths.moviesDir,
             out
         )
         val storage = File("/storage")
@@ -3253,7 +3335,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun localApks(): MutableList<File> {
         val out: MutableList<File> = ArrayList<File>()
-        scanApkDir(File(File(Environment.getExternalStorageDirectory(), "LocalKTV"), "apps"), out)
+        scanApkDir(AppPaths.appsDir, out)
         val storage = File("/storage")
         val roots = storage.listFiles()
         if (roots != null) {
@@ -3333,7 +3415,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun backupDir(): File {
-        return File(File(Environment.getExternalStorageDirectory(), "LocalKTV"), "backup")
+        return AppPaths.backupDir
     }
 
     private fun backupConfig() {
@@ -3397,7 +3479,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 })
             .setNegativeButton("取消", null)
-            .show()
+            .create().showForTv()
     }
 
     @Throws(Exception::class)
@@ -3881,11 +3963,18 @@ class MainActivity : AppCompatActivity() {
                 startDownloadAndPlay(song)
                 return
             }
+            Log.i(
+                TAG,
+                "playLocalFile song=${stableId(song)} generation=$playbackGeneration " +
+                    "startPositionMs=$startPositionMs path=${f.absolutePath} size=${f.length()}",
+            )
             player!!.stopPlayback()
             setupPlayerListeners(song, startPositionMs, playbackGeneration)
             player!!.setVideoURI(Uri.fromFile(f))
+            if (playWhenPrepared) player!!.start()
         } catch (e: Exception) {
-            Log.e(TAG, "playLocalFile error: " + e.message)
+            playbackPreparing = false
+            Log.e(TAG, "playLocalFile error: " + e.message, e)
             toast("播放失败")
         }
     }
@@ -4029,6 +4118,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupPlayerListeners(song: Song?, startPositionMs: Int = 0, generation: Long = playbackGeneration) {
         player!!.setOnPreparedListener(OnPreparedListener { mp: MediaPlayer? ->
             if (generation != playbackGeneration || currentSong?.equals(song) != true) return@OnPreparedListener
+            Log.i(TAG, "onPrepared song=${song?.let(::stableId)} generation=$generation play=$playWhenPrepared")
             playbackPreparing = false
             currentMediaPlayer = mp
             applyPlaybackMode()
@@ -4211,16 +4301,20 @@ class MainActivity : AppCompatActivity() {
                 main.post(Runnable {
                     downloads.removeAll { stableId(it.song) == stableId(song) }
                     song.path = localPath
-                    if (pendingPlayAfterDownloadId == stableId(song) &&
-                        (currentSong == null || publicPlaybackActive)
-                    ) {
+                    val shouldStartPendingSong = pendingPlayAfterDownloadId == stableId(song)
+                    Log.i(
+                        TAG,
+                        "downloadComplete song=${stableId(song)} pending=$shouldStartPendingSong " +
+                            "current=${currentSong?.let(::stableId)} preparing=$playbackPreparing path=$localPath",
+                    )
+                    if (shouldStartPendingSong) {
                         pendingPlayAfterDownloadId = null
                         publicPlaybackActive = false
                         play(song)
                     }
                     if (currentTabIndex == 6) loadDownloadedList()
                     if (currentSong?.equals(song) == true && playbackPreparing) hideDownloadProgress()
-                    if (currentSong?.equals(song) == true && playbackPreparing) {
+                    if (!shouldStartPendingSong && currentSong?.equals(song) == true && playbackPreparing) {
                         switchToLocalPlayback(song)
                     }
                 })
@@ -4743,7 +4837,7 @@ class MainActivity : AppCompatActivity() {
             isClickable = false
         }, LinearLayout.LayoutParams(-1, dp(70)).apply { topMargin = dp(22) })
         dialog = AlertDialog.Builder(this).setView(panel).create()
-        dialog.show()
+        dialog.showForTv(afterShow = { actions.getChildAt(0)?.requestFocus() })
     }
 
     private fun hasValidLocalSongFile(song: Song): Boolean {
@@ -4758,7 +4852,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("确定删除 ${song.title} 的本地文件吗？歌曲仍保留在曲库中。")
             .setNegativeButton("取消", null)
             .setPositiveButton("确定") { _, _ -> deleteDownloadedSong(song) }
-            .show()
+            .create().showForTv()
     }
 
     private fun showSongInfo(song: Song) {
@@ -4772,7 +4866,7 @@ class MainActivity : AppCompatActivity() {
                 + "\n歌词资源：" + resourceState(song.lyricUrl, song.lyricPath)
                 + "\n来源：" + (if (song.remote) "网络曲库" else song.path))
         AlertDialog.Builder(this).setTitle("歌曲信息").setMessage(message)
-            .setPositiveButton("确定", null).show()
+            .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun resourceState(remoteUrl: String?, localPath: String?): String {
@@ -4794,7 +4888,7 @@ class MainActivity : AppCompatActivity() {
                 "确定",
                 DialogInterface.OnClickListener { d: DialogInterface?, w: Int -> removeSong(song) })
             .setNegativeButton("取消", null)
-            .show()
+            .create().showForTv()
     }
 
     private fun removeSong(song: Song) {
@@ -4844,7 +4938,7 @@ class MainActivity : AppCompatActivity() {
                     showPlaylists()
                 })
             .setNegativeButton("取消", null)
-            .show()
+            .create().showForTv()
     }
 
     private fun fetchCatalog() {
@@ -4903,7 +4997,7 @@ class MainActivity : AppCompatActivity() {
                     fetchCatalog()
                 })
             .setNegativeButton("取消", null)
-            .show()
+            .create().showForTv()
     }
 
     private fun showKeyboardDialog() {
@@ -4958,6 +5052,7 @@ class MainActivity : AppCompatActivity() {
         dialog.setOnShowListener(OnShowListener { d: DialogInterface? ->
             if (grid.getChildCount() > 0) grid.getChildAt(0).requestFocus()
         })
+        dialog.restoreSourceFocusOnDismiss()
         dialog.show()
     }
 
@@ -5067,9 +5162,13 @@ class MainActivity : AppCompatActivity() {
     /** 视频背景  */
     private var videoBackground: KtvVideoView? = null
     private var playerLayerRoot: FrameLayout? = null
+    private var playerFocusBorder: View? = null
     private var homePlayerHost: View? = null
     private var subPagePlayerHost: View? = null
     private var activePlayerHost: View? = null
+    private var lastHomeFocusSource: View? = null
+    private var lastHomeFocusTarget: View? = null
+    private var lastHomeFocusReverseKey: Int = KeyEvent.KEYCODE_UNKNOWN
 
     /** 顶部状态栏区域  */
     private val topStatusBar: LinearLayout? = null
@@ -5238,10 +5337,12 @@ class MainActivity : AppCompatActivity() {
     private var fullScreenSeekBar: SeekBar? = null
     private var fullScreenTime: TextView? = null
     private var fullScreenSeeking = false
-    private var fullScreenControls: View? = null
+    private var fullScreenControls: LinearLayout? = null
     private var fullScreenProgressRow: View? = null
     private var fullScreenChromeVisible = false
-    private val hideFullScreenChromeRunnable = Runnable { setFullScreenChromeVisible(false) }
+    private val hideFullScreenChromeRunnable = Runnable {
+        if (isFullScreen) setFullScreenChromeVisible(false)
+    }
     private var playbackModeNotice: TextView? = null
     private var songIntroNotice: TextView? = null
     private var songIntroIcon: TextView? = null
@@ -5391,7 +5492,7 @@ class MainActivity : AppCompatActivity() {
         // 新布局不显示独立列表标题，不能让业务标题覆盖面包屑。
         listTitle = TextView(this)
         val breadcrumbHome = findViewById<TextView?>(R.id.breadcrumb_home)
-        if (breadcrumbHome != null) breadcrumbHome.setOnClickListener(View.OnClickListener { v: View? -> showHomePage() })
+        if (breadcrumbHome != null) breadcrumbHome.setOnClickListener { navigateBackToHome() }
 
         // ===== 顶栏/底栏控件 =====
         topBar = findViewById<View?>(R.id.top_bar)
@@ -5487,6 +5588,13 @@ class MainActivity : AppCompatActivity() {
             val maskIndex = root.indexOfChild(findViewById<View>(R.id.mask))
             val insertionIndex = if (maskIndex >= 0) maskIndex else root.childCount
             root.addView(persistentVideo, insertionIndex, FrameLayout.LayoutParams(1, 1))
+            playerFocusBorder = View(this).apply {
+                setBackgroundResource(R.drawable.bg_player_focus)
+                isClickable = false
+                isFocusable = false
+                visibility = View.GONE
+                elevation = dp(6).toFloat()
+            }.also { root.addView(it, insertionIndex + 1, FrameLayout.LayoutParams(1, 1)) }
             playbackModeNotice = TextView(this).apply {
                 gravity = Gravity.CENTER
                 textSize = 18f
@@ -5525,6 +5633,7 @@ class MainActivity : AppCompatActivity() {
         persistentVideo.bind(playbackEngine)
         playbackEngine.attach(persistentVideo)
         movePlayerToHost(homePlayerHost)
+        listOfNotNull(homePlayerHost, subPagePlayerHost).forEach(::bindPlayerHostFocus)
 
         // 设置子页面返回按钮
         if (btnBack != null) btnBack!!.setOnClickListener { navigateBack() }
@@ -5556,10 +5665,10 @@ class MainActivity : AppCompatActivity() {
             btnBottomGuess, btnBottomSettings, btnBottomExit, btnBack, btnPrevPage, btnNextPage,
             homeCardRank, homeCardSong, homeCardSinger, homeCardLocal, homeCardRegular,
             homeCardFavorite, homeCardCategory, homePoster,
+            homePlayerHost,
         ).forEach(::installPressFeedback)
         configureTvFocusNavigation()
         prepareTvFocusableTree(window.decorView)
-        btnTopSearch?.requestFocus()
 
         // 设置歌曲列表点击事件
         songList!!.setOnItemClickListener(OnItemClickListener { parent: AdapterView<*>?, view: View?, position: Int, id: kotlin.Long ->
@@ -5629,12 +5738,14 @@ class MainActivity : AppCompatActivity() {
      * 首页 - 仿原版3列布局(视频+4卡片+新歌榜海报)
      */
     private fun showHomePage() {
+        if (!restoringFocusRoute) focusReturnStack.clear()
         browseRequestVersion++
         main.removeCallbacks(keyboardSearchRunnable)
         currentPage = "首页"
         currentTabIndex = -1
         currentCategories.clear()
         currentCategoryIndex = -1
+        clearHomeFocusTransition()
         updateCategories()
         // 隐藏子页面外壳,显示首页 3 列
         val shell = findViewById<View?>(R.id.main_layout)
@@ -5650,6 +5761,7 @@ class MainActivity : AppCompatActivity() {
         bottomBar?.visibility = View.VISIBLE
         updateContentFrameMargins(dp(64), dp(64))
         if (homeLayout != null) homeLayout!!.setVisibility(View.VISIBLE)
+        configureTvFocusNavigation()
         movePlayerToHost(homePlayerHost)
         // 同步当前播放信息到首页
         syncPlayerInfo()
@@ -5657,7 +5769,6 @@ class MainActivity : AppCompatActivity() {
         if (subCategoryScroll != null) subCategoryScroll!!.setVisibility(View.GONE)
         window.decorView.post {
             prepareTvFocusableTree(window.decorView)
-            if (window.decorView.findFocus() == null) btnTopSearch?.requestFocus()
         }
     }
 
@@ -5666,12 +5777,14 @@ class MainActivity : AppCompatActivity() {
      * @param breadcrumb 面包屑显示文字(主页 / xxx)
      */
     private fun showSubPageShell(breadcrumb: String) {
+        rememberReturnPointIfNeeded(breadcrumb)
         browseRequestVersion++
         visibleSongs.clear()
         visibleSingers.clear()
         songList?.adapter = tvAdapter()
         currentPage = breadcrumb
         if (homeLayout != null) homeLayout!!.setVisibility(View.GONE)
+        clearHomeTopFocusNavigation()
         topBar?.apply {
             visibility = View.VISIBLE
             translationY = dp(22).toFloat()
@@ -5696,11 +5809,13 @@ class MainActivity : AppCompatActivity() {
             songList!!.setBackgroundResource(R.drawable.bg_song_list)
             songList!!.setDivider(ColorDrawable(Color.argb(34, 255, 255, 255)))
             songList!!.setDividerHeight(dp(1))
+            songList!!.selector = ColorDrawable(Color.TRANSPARENT)
+            songList!!.itemsCanFocus = true
+            songList!!.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         }
         movePlayerToHost(subPagePlayerHost)
         window.decorView.post {
             prepareTvFocusableTree(window.decorView)
-            if (window.decorView.findFocus() == null) btnBack?.requestFocus()
         }
     }
 
@@ -5719,6 +5834,23 @@ class MainActivity : AppCompatActivity() {
         host.post { applyPlayerBounds(host) }
     }
 
+    private fun bindPlayerHostFocus(host: View) {
+        host.isClickable = true
+        host.isFocusable = true
+        host.isFocusableInTouchMode = false
+        host.setOnClickListener { showFullScreenPlayer() }
+        host.setOnFocusChangeListener { _, hasFocus ->
+            playerFocusBorder?.apply {
+                isActivated = hasFocus
+                visibility = if (hasFocus && !isFullScreen) View.VISIBLE else View.GONE
+            }
+            if (hasFocus && !isFullScreen) {
+                activePlayerHost = host
+                applyPlayerBounds(host)
+            }
+        }
+    }
+
     private fun applyPlayerBounds(host: View) {
         val root = playerLayerRoot ?: return
         val video = player ?: return
@@ -5735,6 +5867,17 @@ class MainActivity : AppCompatActivity() {
         params.topMargin = hostLocation[1] - rootLocation[1]
         video.layoutParams = params
         video.visibility = View.VISIBLE
+        playerFocusBorder?.let { border ->
+            val borderParams = (border.layoutParams as? FrameLayout.LayoutParams)
+                ?: FrameLayout.LayoutParams(host.width, host.height)
+            borderParams.width = host.width
+            borderParams.height = host.height
+            borderParams.leftMargin = params.leftMargin
+            borderParams.topMargin = params.topMargin
+            border.layoutParams = borderParams
+            border.isActivated = host.hasFocus()
+            border.visibility = if (host.hasFocus() && !isFullScreen) View.VISIBLE else View.GONE
+        }
         updatePlaybackNoticeBounds()
     }
 
@@ -5748,6 +5891,7 @@ class MainActivity : AppCompatActivity() {
         params.leftMargin = 0
         params.topMargin = 0
         video.layoutParams = params
+        playerFocusBorder?.visibility = View.GONE
         video.bringToFront()
         songIntroNotice?.bringToFront()
         songIntroIcon?.bringToFront()
@@ -5988,11 +6132,17 @@ class MainActivity : AppCompatActivity() {
                 addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 attributes = attributes.apply { dimAmount = 0.56f }
             }
+            TvFocusStyler.disablePlatformHighlightTree(root)
             root.alpha = 0f
             root.scaleX = 0.96f
             root.scaleY = 0.96f
             root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(160L).start()
+            root.findViewById<View>(R.id.image_recommend_close).apply {
+                isFocusable = true
+                requestFocus()
+            }
         }
+        dialog.restoreSourceFocusOnDismiss()
         dialog.show()
 
         val historySnapshot = sangHistory.toList()
@@ -6106,7 +6256,6 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setupTabs() {
         if (tabContainer == null) return
-        tabContainer!!.removeAllViews()
         val tabs: Array<out String?>
         val targets: IntArray
         if (currentTabIndex >= 4 && currentTabIndex <= 6) {
@@ -6122,18 +6271,18 @@ class MainActivity : AppCompatActivity() {
             targets = intArrayOf(0, 10)
         }
         tabContainer!!.setVisibility(View.VISIBLE)
-        for (i in tabs.indices) {
-            val index = targets[i]
-            val tab = TextView(this)
-            tab.setText(tabs[i])
-            tab.setTextSize(14f)
+
+        fun bindTab(tab: TextView, label: String, index: Int) {
+            tab.text = label
+            tab.textSize = 14f
             tab.minWidth = 0
             tab.setPadding(0, 0, 0, 0)
-            tab.setGravity(Gravity.CENTER)
-            tab.setFocusable(true)
-            tab.setClickable(true)
+            tab.gravity = Gravity.CENTER
+            tab.contentDescription = "focus:tab:$label"
+            tab.isFocusable = true
+            tab.isClickable = true
             updateTabStyle(tab, index == currentTabIndex)
-            tab.setOnClickListener(View.OnClickListener { v: View? ->
+            tab.setOnClickListener {
                 currentTabIndex = index
                 when (index) {
                     0 -> showAllSongsPage()
@@ -6147,13 +6296,38 @@ class MainActivity : AppCompatActivity() {
                     8 -> showSettingsPage()
                     10 -> showLocalPage()
                 }
-            })
+            }
+        }
+
+        val canReuse = tabContainer!!.childCount == tabs.size && tabs.indices.all { position ->
+            (tabContainer!!.getChildAt(position) as? TextView)?.text?.toString() == tabs[position]
+        }
+        if (canReuse) {
+            tabs.indices.forEach { position ->
+                bindTab(
+                    tabContainer!!.getChildAt(position) as TextView,
+                    tabs[position].orEmpty(),
+                    targets[position],
+                )
+            }
+            return
+        }
+
+        val focusedTab = window.decorView.findFocus()?.takeIf { isDescendantOf(it, tabContainer) }
+            ?.let(::captureFocusBookmark)
+        tabContainer!!.removeAllViews()
+        for (i in tabs.indices) {
+            val index = targets[i]
+            val tab = TextView(this)
+            bindTab(tab, tabs[i].orEmpty(), index)
             installPressFeedback(tab)
             tabContainer!!.addView(tab, LinearLayout.LayoutParams(dp(76), -1))
         }
+        restoreFocusBookmark(focusedTab)
     }
 
     private fun installPressFeedback(view: View) {
+        TvFocusStyler.install(view)
         if (view.isClickable) {
             view.isFocusable = true
             view.isFocusableInTouchMode = false
@@ -6167,37 +6341,77 @@ class MainActivity : AppCompatActivity() {
             }
             false
         }
-        view.onFocusChangeListener = OnFocusChangeListener { target, focused ->
-            target.animate()
-                .scaleX(if (focused) 1.04f else 1f)
-                .scaleY(if (focused) 1.04f else 1f)
-                .setDuration(120L)
-                .start()
-        }
     }
 
     private fun configureTvFocusNavigation() {
-        btnTopSearch?.nextFocusDownId = R.id.home_card_regular
+        btnTopSearch?.nextFocusDownId = R.id.home_player_container
         btnTopOrder?.nextFocusDownId = R.id.home_card_rank
         btnTopVocal?.nextFocusDownId = R.id.home_card_rank
-        btnTopNext?.nextFocusDownId = R.id.home_card_song
-        btnTopPause?.nextFocusDownId = R.id.home_card_singer
+        btnTopNext?.nextFocusDownId = R.id.home_card_rank
+        btnTopPause?.nextFocusDownId = R.id.home_card_rank
         btnTopReplay?.nextFocusDownId = R.id.home_poster_container
         btnTopTone?.nextFocusDownId = R.id.home_poster_container
 
-        homeCardRank?.nextFocusUpId = R.id.btn_top_order
-        homeCardSong?.nextFocusUpId = R.id.btn_top_next
-        homeCardSinger?.nextFocusUpId = R.id.btn_top_pause
+        homePlayerHost?.nextFocusUpId = R.id.btn_top_search
+        homePlayerHost?.nextFocusDownId = R.id.home_card_regular
+        homePlayerHost?.nextFocusRightId = R.id.home_card_rank
+
+        homeCardRank?.nextFocusUpId = R.id.btn_top_pause
+        homeCardRank?.nextFocusLeftId = R.id.home_player_container
+        homeCardRank?.nextFocusDownId = R.id.home_card_song
+        homeCardRank?.nextFocusRightId = R.id.home_poster_container
+        homeCardSong?.nextFocusUpId = R.id.home_card_rank
+        homeCardSong?.nextFocusDownId = R.id.home_card_singer
+        homeCardSong?.nextFocusRightId = R.id.home_poster_container
+        homeCardSinger?.nextFocusUpId = R.id.home_card_song
+        homeCardSinger?.nextFocusDownId = R.id.home_card_local
+        homeCardSinger?.nextFocusRightId = R.id.home_poster_container
+        homeCardLocal?.nextFocusUpId = R.id.home_card_singer
+        homeCardLocal?.nextFocusLeftId = R.id.home_card_category
         homeCardLocal?.nextFocusDownId = R.id.btn_bottom_settings
+        homeCardLocal?.nextFocusRightId = R.id.home_poster_container
+        homeCardRegular?.nextFocusUpId = R.id.home_player_container
+        homeCardRegular?.nextFocusRightId = R.id.home_card_favorite
         homeCardRegular?.nextFocusDownId = R.id.btn_bottom_guess
+        homeCardFavorite?.nextFocusUpId = R.id.btn_top_search
+        homeCardFavorite?.nextFocusLeftId = R.id.home_card_regular
+        homeCardFavorite?.nextFocusRightId = R.id.home_card_category
         homeCardFavorite?.nextFocusDownId = R.id.btn_bottom_guess
+        homeCardCategory?.nextFocusUpId = R.id.home_card_rank
+        homeCardCategory?.nextFocusLeftId = R.id.home_card_favorite
+        homeCardCategory?.nextFocusRightId = R.id.home_card_local
         homeCardCategory?.nextFocusDownId = R.id.btn_bottom_settings
         homePosterView?.nextFocusUpId = R.id.btn_top_tone
+        homePosterView?.nextFocusLeftId = R.id.home_card_song
         homePosterView?.nextFocusDownId = R.id.btn_bottom_exit
 
         btnBottomGuess?.nextFocusUpId = R.id.home_card_regular
+        btnBottomGuess?.nextFocusRightId = R.id.btn_bottom_settings
         btnBottomSettings?.nextFocusUpId = R.id.home_card_local
+        btnBottomSettings?.nextFocusLeftId = R.id.btn_bottom_guess
+        btnBottomSettings?.nextFocusRightId = R.id.btn_bottom_exit
         btnBottomExit?.nextFocusUpId = R.id.home_poster_container
+        btnBottomExit?.nextFocusLeftId = R.id.btn_bottom_settings
+    }
+
+    private fun clearHomeFocusTransition() {
+        lastHomeFocusSource = null
+        lastHomeFocusTarget = null
+        lastHomeFocusReverseKey = KeyEvent.KEYCODE_UNKNOWN
+    }
+
+    private fun oppositeDpadKey(code: Int): Int = when (code) {
+        KeyEvent.KEYCODE_DPAD_LEFT -> KeyEvent.KEYCODE_DPAD_RIGHT
+        KeyEvent.KEYCODE_DPAD_RIGHT -> KeyEvent.KEYCODE_DPAD_LEFT
+        KeyEvent.KEYCODE_DPAD_UP -> KeyEvent.KEYCODE_DPAD_DOWN
+        KeyEvent.KEYCODE_DPAD_DOWN -> KeyEvent.KEYCODE_DPAD_UP
+        else -> KeyEvent.KEYCODE_UNKNOWN
+    }
+
+    private fun clearHomeTopFocusNavigation() {
+        listOfNotNull(
+            btnTopSearch, btnTopOrder, btnTopVocal, btnTopNext, btnTopPause, btnTopReplay, btnTopTone,
+        ).forEach { it.nextFocusDownId = View.NO_ID }
     }
 
     /**
@@ -6926,15 +7140,17 @@ class MainActivity : AppCompatActivity() {
         songList!!.setDivider(ColorDrawable(Color.TRANSPARENT))
         songList!!.setDividerHeight(dp(12))
         songList!!.setBackgroundColor(Color.TRANSPARENT)
-        songList!!.adapter = SettingsListAdapter(this, entries)
-        songList!!.post { songList?.setSelection(0); songList?.requestFocus() }
+        val settingsAdapter = SettingsListAdapter(this, entries, R.id.btn_back)
+        songList!!.adapter = settingsAdapter
+        btnBack?.nextFocusDownId = settingsAdapter.firstActionId
+        settingsAdapter.requestInitialFocus(songList!!)
     }
 
     private fun openSettingsItem(position: Int) {
         activeSettingsEntries.getOrNull(position)?.action?.invoke()
     }
 
-    private fun showSettingsSection(section: Int) {
+    private fun showSettingsSection(section: Int, requestInitialFocus: Boolean = true) {
         val names = arrayOf("网络设置", "数据设置", "播放设置", "声音设置", "界面设置")
         currentTabIndex = 8
         showSubPageShell("主页 / 设置 / ${names[section]}")
@@ -6952,20 +7168,20 @@ class MainActivity : AppCompatActivity() {
             )
             1 -> listOf(
                 SettingsEntry(R.drawable.ott_ic_data_upgrade, "曲库", "数据库 ${library.muse.songCount()} 首  本地已下载 ${countDownloadedFiles()} 首", "更新") {
-                    io.execute { library.muse.close(); library.muse.open(); main.post { showSettingsSection(1) } }
+                    io.execute { library.muse.close(); library.muse.open(); main.post { showSettingsSection(1, false) } }
                 },
                 SettingsEntry(R.drawable.ott_ic_data_setting, "U盘加歌", "扫描U盘内按规定命名的歌曲文件，并添加到曲库中", "立即加歌") { toast("未检测到U盘") },
                 SettingsEntry(R.drawable.ott_ic_setting_storage_space, "预留存储空间", "当前 ${String.format(Locale.ROOT, "%.1f", reserveStorageGb)} GB") { showReserveStorageDialog() },
-                SettingsEntry(R.drawable.ott_ic_data_reset, "自动删歌", "当剩余存储空间低于预留空间时，自动删除冷门歌曲", action = { autoDeleteSongs = !autoDeleteSongs; saveState(); showSettingsSection(1) }, checked = autoDeleteSongs),
+                SettingsEntry(R.drawable.ott_ic_data_reset, "自动删歌", "当剩余存储空间低于预留空间时，自动删除冷门歌曲", action = { autoDeleteSongs = !autoDeleteSongs; saveState() }, checked = autoDeleteSongs),
                 SettingsEntry(R.drawable.ott_ic_data_upgrade, "重置数据库", "删除本地数据库并重新下载", "重置") { confirmResetDatabase() },
                 SettingsEntry(R.drawable.ott_ic_setting_storage_space, "硬盘读写权限") { toast(storageStatusText()) },
             )
             2 -> listOf(
                 SettingsEntry(R.drawable.ott_ic_pub_play, "公播") { showPubPlayDialog() },
-                SettingsEntry(R.drawable.ott_ic_download_setting, "开机清空下载列表", "开机时删除本地已下载歌曲并清理数据库状态", action = { clearDownloadsOnBoot = !clearDownloadsOnBoot; saveState(); showSettingsSection(2) }, checked = clearDownloadsOnBoot),
+                SettingsEntry(R.drawable.ott_ic_download_setting, "开机清空下载列表", "开机时删除本地已下载歌曲并清理数据库状态", action = { clearDownloadsOnBoot = !clearDownloadsOnBoot; saveState() }, checked = clearDownloadsOnBoot),
                 SettingsEntry(R.drawable.ott_ic_tv_display_mode, "自动全屏", "设置多久未操作后自动进入全屏", "设置间隔") { showAutoFullscreenDialog() },
                 SettingsEntry(R.drawable.ott_ic_play, "音画同步") { showAudioSyncDialog() },
-                SettingsEntry(R.drawable.ott_ic_marquee_setting, "歌曲片头字幕", action = { songTitleSubtitleEnabled = !songTitleSubtitleEnabled; saveState(); showSettingsSection(2) }, checked = songTitleSubtitleEnabled),
+                SettingsEntry(R.drawable.ott_ic_marquee_setting, "歌曲片头字幕", action = { songTitleSubtitleEnabled = !songTitleSubtitleEnabled; saveState() }, checked = songTitleSubtitleEnabled),
             )
             3 -> listOf(
                 SettingsEntry(R.drawable.ott_ic_sound, "声音设置") { showSoundSettingsDialog() },
@@ -6976,8 +7192,10 @@ class MainActivity : AppCompatActivity() {
         songList!!.divider = ColorDrawable(Color.TRANSPARENT)
         songList!!.dividerHeight = dp(12)
         songList!!.setBackgroundColor(Color.TRANSPARENT)
-        songList!!.adapter = SettingsListAdapter(this, entries)
-        songList!!.post { songList?.setSelection(0); songList?.requestFocus() }
+        val settingsAdapter = SettingsListAdapter(this, entries, R.id.btn_back)
+        songList!!.adapter = settingsAdapter
+        btnBack?.nextFocusDownId = settingsAdapter.firstActionId
+        if (requestInitialFocus) settingsAdapter.requestInitialFocus(songList!!)
     }
 
     private fun isNetworkConnected(): Boolean {
@@ -7079,7 +7297,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage("将删除本地曲库数据库，然后从 Gitee 重新下载。不会保留备份，是否继续？")
             .setNegativeButton("取消", null)
             .setPositiveButton("确认") { _, _ -> resetDatabaseFromGitee() }
-            .show()
+            .create().showForTv()
     }
 
     private fun resetDatabaseFromGitee() {
@@ -7095,7 +7313,7 @@ class MainActivity : AppCompatActivity() {
                 if (opened) {
                     showDatabaseLoading(false, "", null)
                     toast("数据库重置完成")
-                    showSettingsSection(1)
+                    showSettingsSection(1, false)
                 } else {
                     showDatabaseLoading(true, "数据库重置失败：${result.exceptionOrNull()?.message.orEmpty()}", null)
                 }
@@ -7153,6 +7371,63 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ===== 设置子功能 (新Tab版) =====
+    private fun dialogSingleChoiceGroup(
+        labels: Array<String>,
+        selected: Int,
+        onSelected: (Int) -> Unit,
+    ): android.widget.RadioGroup = android.widget.RadioGroup(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(6), dp(20), dp(6))
+        labels.forEachIndexed { index, label ->
+            addView(android.widget.RadioButton(this@MainActivity).apply {
+                id = View.generateViewId()
+                tag = index
+                text = label
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                isChecked = index == selected
+                minimumHeight = 0
+                minHeight = 0
+                setPadding(dp(8), 0, dp(14), 0)
+                layoutParams = android.widget.RadioGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(48),
+                )
+                TvFocusStyler.install(this)
+            })
+        }
+        setOnCheckedChangeListener { group, checkedId ->
+            val index = group.findViewById<View>(checkedId)?.tag as? Int
+                ?: return@setOnCheckedChangeListener
+            onSelected(index)
+        }
+    }
+
+    private fun dialogMultiChoiceGroup(
+        labels: Array<String>,
+        checked: BooleanArray,
+    ): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(20), dp(6), dp(20), dp(6))
+        labels.forEachIndexed { index, label ->
+            addView(android.widget.CheckBox(this@MainActivity).apply {
+                text = label
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                isChecked = checked.getOrElse(index) { false }
+                minimumHeight = 0
+                minHeight = 0
+                setPadding(dp(8), 0, dp(14), 0)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    dp(48),
+                )
+                setOnCheckedChangeListener { _, value -> checked[index] = value }
+                TvFocusStyler.install(this)
+            })
+        }
+    }
+
     private fun showScreenDialog() {
         val items = arrayOf<String>("16 : 9", "4 : 3", "全屏")
         val selected = when (screenMode) {
@@ -7161,15 +7436,16 @@ class MainActivity : AppCompatActivity() {
             else -> 2
         }
         var pending = selected
+        val choices = dialogSingleChoiceGroup(items, selected) { pending = it }
         AlertDialog.Builder(this)
             .setTitle("视频比例")
-            .setSingleChoiceItems(items, selected) { _, which -> pending = which }
+            .setView(choices)
             .setNegativeButton("关闭", null)
             .setPositiveButton("确认") { _, _ ->
                 screenMode = items[pending]
                 saveState()
                 applyScreenMode()
-            }.show()
+            }.create().showForTv()
     }
 
     private fun showAutoFullscreenDialog() {
@@ -7177,15 +7453,16 @@ class MainActivity : AppCompatActivity() {
         val seconds = intArrayOf(30, 45, 60, 120, 0)
         val selected = seconds.indexOf(autoFullscreenSeconds).let { if (it >= 0) it else 4 }
         var pending = selected
+        val choices = dialogSingleChoiceGroup(items, selected) { pending = it }
         AlertDialog.Builder(this).setTitle("设置间隔")
-            .setSingleChoiceItems(items, selected) { _, which -> pending = which }
+            .setView(choices)
             .setNegativeButton("关闭", null)
             .setPositiveButton("确认") { _, _ ->
                 autoFullscreenSeconds = seconds[pending]
                 saveState()
                 schedulePublicFullscreen()
-                showSettingsSection(2)
-            }.show()
+                showSettingsSection(2, false)
+            }.create().showForTv()
     }
 
     private fun showReserveStorageDialog() {
@@ -7199,8 +7476,8 @@ class MainActivity : AppCompatActivity() {
             .setView(input).setNegativeButton("关闭", null).setPositiveButton("确认") { _, _ ->
                 reserveStorageGb = input.text.toString().toDoubleOrNull()?.coerceIn(0.5, 62.92) ?: reserveStorageGb
                 saveState()
-                showSettingsSection(1)
-            }.show()
+                showSettingsSection(1, false)
+            }.create().showForTv()
     }
 
     private fun showAudioSyncDialog() {
@@ -7217,14 +7494,18 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(32), dp(8), dp(32), dp(16)); addView(value); addView(seek) }
         AlertDialog.Builder(this).setTitle("音画同步").setView(box).setMessage("重唱或切歌后生效")
             .setNegativeButton("关闭", null)
-            .setPositiveButton("确认") { _, _ -> audioDelayMs = pendingDelay; saveState() }.show()
+            .setPositiveButton("确认") { _, _ -> audioDelayMs = pendingDelay; saveState() }
+            .create().showForTv()
     }
 
     private fun showBannerConfigDialog() {
         val labels = arrayOf("新歌", "戏曲", "广场舞")
+        val pending = booleanArrayOf(true, true, true)
+        val choices = dialogMultiChoiceGroup(labels, pending)
         AlertDialog.Builder(this).setTitle("轮播图配置")
-            .setMultiChoiceItems(labels, booleanArrayOf(true, true, true), null)
-            .setNegativeButton("关闭", null).setPositiveButton("确认", null).show()
+            .setView(choices)
+            .setNegativeButton("关闭", null).setPositiveButton("确认", null)
+            .create().showForTv()
     }
 
     private fun showSoundSettingsDialog() {
@@ -7303,11 +7584,10 @@ class MainActivity : AppCompatActivity() {
                 applyPlaybackMode()
                 saveState()
             }.create()
-        dialog.setOnShowListener {
+        dialog.showForTv(DialogInterface.BUTTON_NEGATIVE) {
             val available = (resources.displayMetrics.widthPixels * 0.92f).toInt()
             dialog.window?.setLayout(min(dp(790), available), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        dialog.show()
     }
 
     private fun showSingModeDialog() {
@@ -7324,7 +7604,7 @@ class MainActivity : AppCompatActivity() {
                 saveState()
                 applyPlaybackMode()
                 toast("演唱模式: " + singMode)
-            }).show()
+            }).create().showForTv()
     }
 
     private fun showVocalChannelDialog() {
@@ -7335,7 +7615,7 @@ class MainActivity : AppCompatActivity() {
                 setVocalChannelMode(items[which])
                 showSettingsSection(3)
             }
-            .show()
+            .create().showForTv()
     }
 
     private fun showPubPlayDialog() {
@@ -7344,6 +7624,7 @@ class MainActivity : AppCompatActivity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(8), dp(24), dp(18))
+            addView(dialogSingleChoiceGroup(modes, pubPlayMode) { pendingMode = it })
             addView(TextView(this@MainActivity).apply {
                 text = "自定义公播列表                                      +新增公播"
                 textSize = 16f
@@ -7359,7 +7640,6 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(-1, dp(185)))
         }
         AlertDialog.Builder(this).setTitle("公播")
-            .setSingleChoiceItems(modes, pubPlayMode) { _, which -> pendingMode = which }
             .setView(panel)
             .setNegativeButton("关闭", null)
             .setPositiveButton("确认") { _, _ ->
@@ -7368,7 +7648,7 @@ class MainActivity : AppCompatActivity() {
                 saveState()
                 schedulePublicFullscreen()
             }
-            .show()
+            .create().showForTv()
     }
 
     private fun showMarqueeDialog() {
@@ -7397,10 +7677,10 @@ class MainActivity : AppCompatActivity() {
                                     marqueeText = input.getText().toString()
                                     marqueeEnabled = true
                                     saveState()
-                                }).setNegativeButton("取消", null).show()
+                                }).setNegativeButton("取消", null).create().showForTv()
                     }
                     toast("跑马灯: " + (if (marqueeEnabled) marqueeText else "已关闭"))
-                }).show()
+                }).create().showForTv()
     }
 
     private fun showNetworkDlg() {
@@ -7422,14 +7702,14 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("网络设置")
             .setMessage("IP: " + ip + "\n手机遥控端口: 8765\n扫码连接手机点歌")
-            .setPositiveButton("确定", null).show()
+            .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun showAboutDialog() {
         AlertDialog.Builder(this)
             .setTitle("关于麦动")
             .setMessage("Power by 杨家三郎\n版本: " + BuildConfig.VERSION_NAME)
-            .setPositiveButton("确定", null).show()
+            .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
     private fun applyScreenMode() {
@@ -7445,6 +7725,8 @@ class MainActivity : AppCompatActivity() {
      * 更新分类列表 UI
      */
     private fun updateCategories() {
+        val focusedCategory = window.decorView.findFocus()?.takeIf { isDescendantOf(it, categoryList) }
+            ?.let(::captureFocusBookmark)
         categoryList!!.removeAllViews()
         subCategoryScroll?.visibility = if (currentCategories.isEmpty()) View.GONE else View.VISIBLE
         for (i in currentCategories.indices) {
@@ -7454,6 +7736,7 @@ class MainActivity : AppCompatActivity() {
             cat.setTextSize(16f)
             cat.setPadding(dp(12), 0, dp(12), 0)
             cat.gravity = Gravity.CENTER
+            cat.contentDescription = "focus:category:${currentCategories[i]}"
             cat.setFocusable(true)
             cat.setClickable(true)
             // 设置选中状态
@@ -7523,6 +7806,7 @@ class MainActivity : AppCompatActivity() {
             installPressFeedback(cat)
             categoryList!!.addView(cat)
         }
+        restoreFocusBookmark(focusedCategory)
     }
 
     /**
@@ -7777,6 +8061,8 @@ class MainActivity : AppCompatActivity() {
      * 渲染歌曲列表
      */
     private fun renderSongList() {
+        val focusedSong = window.decorView.findFocus()?.takeIf { isDescendantOf(it, songList) }
+            ?.let(::captureFocusBookmark)
         if (browseMode == "ordered") {
             visibleSongs.clear()
             visibleSongs.addAll(orderQueue.orEmpty())
@@ -7786,6 +8072,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (visibleSongs.isEmpty()) {
             songList!!.adapter = tvAdapter().apply { add("暂无歌曲") }
+            restoreFocusBookmark(focusedSong)
             return
         }
         songList!!.dividerHeight = 0
@@ -7794,7 +8081,7 @@ class MainActivity : AppCompatActivity() {
             else -> "catalog"
         }
         val pageOffset = if (mode == "rank") browsePage * browsePageSize() else 0
-        songList!!.adapter = SongListAdapter(
+        val listAdapter = SongListAdapter(
             this,
             visibleSongs,
             mode,
@@ -7811,7 +8098,8 @@ class MainActivity : AppCompatActivity() {
                 onPauseResume = { song -> toggleDownloadPause(song) },
             ),
         )
-        songList!!.post { songList?.setSelection(0); songList?.requestFocus() }
+        songList!!.adapter = listAdapter
+        restoreFocusBookmark(focusedSong)
     }
 
     private fun songRowState(song: Song): SongRowState {
@@ -7989,7 +8277,7 @@ class MainActivity : AppCompatActivity() {
                                 if (currentTabIndex == 4) loadOrderedList()
                                 toast("已删除: " + removed.title)
                             })
-                        .show()
+                        .create().showForTv()
                 })
             builder.setNeutralButton(
                 "清空全部",
@@ -8015,10 +8303,10 @@ class MainActivity : AppCompatActivity() {
                                 toast("已清空列表")
                             })
                         .setNegativeButton("取消", null)
-                        .show()
+                        .create().showForTv()
                 })
         }
-        builder.show()
+        builder.create().showForTv()
     }
 
     /**
@@ -8036,7 +8324,7 @@ class MainActivity : AppCompatActivity() {
     private fun addToQueue(song: Song) {
         if (!orderQueue!!.contains(song)) {
             val wasQueueEmpty = orderQueue!!.isEmpty()
-            val startWhenReady = wasQueueEmpty && (currentSong == null || publicPlaybackActive)
+            val startWhenReady = wasQueueEmpty
             orderQueue.add(song)
             song.playCount++
             if (::stateDatabase.isInitialized) runCatching {
@@ -8229,6 +8517,10 @@ class MainActivity : AppCompatActivity() {
         return (value * getResources().getDisplayMetrics().density + 0.5f).toInt()
     }
 
+    private fun hasStoragePermission(): Boolean =
+        Build.VERSION.SDK_INT < 23 ||
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
     private fun requestStorage() {
         if (Build.VERSION.SDK_INT >= 23
             && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
@@ -8248,13 +8540,41 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 10) refreshLibrary(null)
+        if (requestCode == 10 && grantResults.isNotEmpty() &&
+            grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        ) {
+            recreate()
+        }
         if (requestCode == 11 && grantResults.size > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) startRecording()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
+        focusRestoreSerial++
         val code = event.getKeyCode()
+        if (isFullScreen) {
+            val center = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
+                code == KeyEvent.KEYCODE_NUMPAD_ENTER
+            val direction = code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN
+            if (center && !fullScreenChromeVisible) {
+                setFullScreenChromeVisible(true)
+                return true
+            }
+            if (center && fullScreenControls?.hasFocus() != true) {
+                setFullScreenChromeVisible(true)
+                fullScreenControls?.getChildAt(0)?.requestFocus()
+                return true
+            }
+            if (direction && !fullScreenChromeVisible) {
+                setFullScreenChromeVisible(true)
+                return true
+            }
+            if ((center || direction) && fullScreenChromeVisible) {
+                main.removeCallbacks(hideFullScreenChromeRunnable)
+                main.postDelayed(hideFullScreenChromeRunnable, 5000L)
+            }
+        }
         if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || code == KeyEvent.KEYCODE_SPACE) {
             togglePlay()
             return true
@@ -8273,6 +8593,37 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         }
+        val homeDirection = homeLayout?.visibility == View.VISIBLE && currentPage == "首页" &&
+            (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT ||
+                code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)
+        if (homeDirection) {
+            val focused = window.decorView.findFocus()
+            val reverseTarget = lastHomeFocusSource
+            if (focused === lastHomeFocusTarget && code == lastHomeFocusReverseKey &&
+                reverseTarget?.isAttachedToWindow == true && reverseTarget.isShown && reverseTarget.isEnabled
+            ) {
+                if (reverseTarget.requestFocus()) {
+                    lastHomeFocusSource = focused
+                    lastHomeFocusTarget = reverseTarget
+                    lastHomeFocusReverseKey = oppositeDpadKey(code)
+                    return true
+                }
+                clearHomeFocusTransition()
+            }
+
+            val handled = super.dispatchKeyEvent(event)
+            main.post {
+                val destination = window.decorView.findFocus()
+                if (focused != null && destination != null && destination !== focused &&
+                    homeLayout?.visibility == View.VISIBLE && currentPage == "首页"
+                ) {
+                    lastHomeFocusSource = focused
+                    lastHomeFocusTarget = destination
+                    lastHomeFocusReverseKey = oppositeDpadKey(code)
+                }
+            }
+            return handled
+        }
         return super.dispatchKeyEvent(event)
     }
 
@@ -8282,17 +8633,161 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun navigateBack() {
+        val returnPoint = focusReturnStack.pollLast()
+        if (returnPoint != null) {
+            restoringFocusRoute = true
+            try {
+                returnPoint.restorePage()
+            } finally {
+                restoringFocusRoute = false
+            }
+            restoreFocusBookmark(returnPoint.focus, returnPoint.directFocus)
+            return
+        }
         when (browseMode) {
-            "playlist_id" -> returnToCategoryPlaylists()
+            "playlist_id", "playlist_id_search" -> returnToCategoryPlaylists()
             "settings_section" -> showSettingsPage()
             else -> showHomePage()
         }
     }
 
+    private fun navigateBackToHome() {
+        while (focusReturnStack.size > 1) focusReturnStack.pollLast()
+        if (focusReturnStack.isNotEmpty()) navigateBack() else showHomePage()
+    }
+
+    private fun rememberReturnPointIfNeeded(targetPage: String) {
+        if (restoringFocusRoute || targetPage == currentPage) return
+        val focus = captureFocusBookmark(window.decorView.findFocus())
+        val fromHome = homeLayout?.visibility == View.VISIBLE || currentPage == "首页"
+        if (fromHome) {
+            focusReturnStack.clear()
+            focusReturnStack.addLast(FocusReturnPoint({ showHomePage() }, focus, window.decorView.findFocus()))
+            return
+        }
+        val currentDepth = currentPage.count { it == '/' }
+        val targetDepth = targetPage.count { it == '/' }
+        if (targetDepth <= currentDepth) return
+
+        val savedMode = browseMode
+        val savedParam = browseParam
+        val savedPage = browsePage
+        val savedQuery = activeSearchQuery
+        val savedCategory = currentCategories.getOrNull(currentCategoryIndex)
+        val restorePage: () -> Unit = when (savedMode) {
+            "singer_list" -> ({
+                loadSingers()
+                browsePage = savedPage
+                savedCategory?.let { browseParam = it }
+                activeSearchQuery = savedQuery
+                loadSingerList(savedCategory ?: "全部", savedQuery)
+            })
+            "category_list" -> ({
+                searchScope = "playlist"
+                activeSearchQuery = savedQuery
+                setSearchText(savedQuery)
+                currentTabIndex = 2
+                showSubPageShell("主页 / 分类")
+                setupTabs()
+                currentCategories.clear()
+                currentCategoryIndex = -1
+                updateCategories()
+                browseMode = "category_list"
+                browseParam = savedParam
+                browsePage = savedPage
+                loadCategoryPlaylistPage(savedQuery)
+            })
+            "settings" -> ({ showSettingsPage() })
+            else -> ({ showHomePage() })
+        }
+        focusReturnStack.addLast(FocusReturnPoint(restorePage, focus, window.decorView.findFocus()))
+    }
+
+    private fun captureFocusBookmark(view: View?): FocusBookmark? {
+        if (view == null) return null
+        val resourceName = if (view.id != View.NO_ID && (view.id ushr 24) != 0) {
+            runCatching { resources.getResourceName(view.id) }.getOrNull()
+        } else null
+        val marker = view.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        val text = (view as? TextView)?.text?.toString()?.takeIf { it.isNotBlank() }
+        val groupText = if (view is ViewGroup) collectFocusText(view).takeIf { it.isNotBlank() } else null
+        return FocusBookmark(resourceName, marker, text, groupText)
+    }
+
+    private fun collectFocusText(view: View): String {
+        val values = ArrayList<String>(3)
+        fun collect(node: View) {
+            if (values.size >= 3) return
+            if (node is TextView) {
+                node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let(values::add)
+            } else if (node is ViewGroup) {
+                for (index in 0 until node.childCount) collect(node.getChildAt(index))
+            }
+        }
+        collect(view)
+        return values.joinToString("|")
+    }
+
+    private fun restoreFocusBookmark(bookmark: FocusBookmark?, preferredView: View? = null) {
+        if (bookmark == null && preferredView == null) return
+        val serial = ++focusRestoreSerial
+        var restored = false
+        listOf(0L, 60L, 180L, 450L, 900L).forEach { delay ->
+            main.postDelayed({
+                if (restored || serial != focusRestoreSerial) return@postDelayed
+                val target = preferredView?.takeIf { it.isAttachedToWindow && it.isShown && it.isEnabled && it.isFocusable }
+                    ?: bookmark?.let { findFocusTarget(window.decorView, it) }
+                if (target != null) {
+                    restored = target.requestFocus() || target.requestFocusFromTouch()
+                    if (restored) {
+                        target.refreshDrawableState()
+                        target.jumpDrawablesToCurrentState()
+                        target.invalidate()
+                    }
+                }
+            }, delay)
+        }
+    }
+
+    private fun findFocusTarget(root: View, bookmark: FocusBookmark): View? {
+        var textMatch: View? = null
+        var groupMatch: View? = null
+        fun visit(view: View): View? {
+            if (view.visibility != View.VISIBLE || !view.isShown || !view.isEnabled) return null
+            if (view.isFocusable) {
+                val resourceName = if (view.id != View.NO_ID) {
+                    runCatching { resources.getResourceName(view.id) }.getOrNull()
+                } else null
+                if (bookmark.resourceName != null && resourceName == bookmark.resourceName) return view
+                if (bookmark.marker != null && view.contentDescription?.toString() == bookmark.marker) return view
+                if (textMatch == null && bookmark.text != null &&
+                    (view as? TextView)?.text?.toString() == bookmark.text
+                ) textMatch = view
+                if (groupMatch == null && bookmark.groupText != null && view is ViewGroup &&
+                    collectFocusText(view) == bookmark.groupText
+                ) groupMatch = view
+            }
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) visit(view.getChildAt(index))?.let { return it }
+            }
+            return null
+        }
+        return visit(root) ?: textMatch ?: groupMatch
+    }
+
+    private fun isDescendantOf(view: View, ancestor: View?): Boolean {
+        if (ancestor == null) return false
+        var current: View? = view
+        while (current != null) {
+            if (current === ancestor) return true
+            current = current.parent as? View
+        }
+        return false
+    }
+
     private fun prepareTvFocusableTree(view: View) {
         if (view.isClickable && view.visibility == View.VISIBLE && view.isEnabled) {
-            view.isFocusable = true
-            view.isFocusableInTouchMode = false
+            TvFocusStyler.install(view)
         }
         if (view is ViewGroup) {
             for (index in 0 until view.childCount) prepareTvFocusableTree(view.getChildAt(index))
@@ -8414,7 +8909,7 @@ class MainActivity : AppCompatActivity() {
                     toast((if (added) "已加入：" else "已移出：") + playlist)
                     if ("歌单" == currentPage) showPlaylistSongs(playlist)
                 })
-            .show()
+            .create().showForTv()
     }
 
     companion object {

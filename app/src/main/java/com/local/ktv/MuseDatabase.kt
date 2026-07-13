@@ -2,7 +2,6 @@ package com.local.ktv
 
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
-import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.util.Locale
@@ -499,12 +498,9 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
 
     companion object {
         private const val TAG = "MuseDatabase"
-        private const val DEFAULT_DB_PATH = "/storage/emulated/0/MaidongKTV/database/muse.db"
-        private const val LEGACY_DB_PATH = "/storage/emulated/0/MuseLocalServer/__common/db/muse.db"
-        private const val FALLBACK_DB_PATH = "/storage/emulated/0/muse/muse.db"
+        private const val DEFAULT_DB_PATH = "${AppPaths.ROOT_PATH}/database/muse.db"
         const val PAGE_SIZE = 10
-        const val VIDEO_ROOT = "/storage/emulated/0/MaidongKTV/video"
-        const val LEGACY_VIDEO_ROOT = "/storage/emulated/0/MuseLocalServer/video"
+        const val VIDEO_ROOT = AppPaths.VIDEO_PATH
         const val CLOUD_SONG_DIR = "cloud-song"
         const val LOCAL_SONG_DIR = "local"
 
@@ -525,20 +521,10 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
             if (song == null) return ""
             song.dbPath?.takeIf(String::isNotEmpty)?.let { path ->
                 val relative = path.trimStart('/')
-                val candidates = listOf(
-                    File("/storage/emulated/0/MaidongKTV", relative),
-                    File("/storage/emulated/0/muse/mls", relative),
-                    File("/storage/emulated/0/MuseLocalServer", relative),
-                ).map { File(it, song.filename.orEmpty()) }
-                return candidates.firstOrNull(File::exists)?.absolutePath
-                    ?: candidates.first().absolutePath
+                return File(File(AppPaths.root, relative), song.filename.orEmpty()).absolutePath
             }
             return song.filename?.takeIf(String::isNotEmpty)?.let { filename ->
-                listOf(
-                    File("$VIDEO_ROOT/$CLOUD_SONG_DIR", filename),
-                    File("/storage/emulated/0/muse/mls/video/$CLOUD_SONG_DIR", filename),
-                    File("$LEGACY_VIDEO_ROOT/$CLOUD_SONG_DIR", filename),
-                ).firstOrNull(File::exists)?.absolutePath ?: "$VIDEO_ROOT/$CLOUD_SONG_DIR/$filename"
+                File(AppPaths.cloudSongsDir, filename).absolutePath
             }.orEmpty()
         }
 
@@ -547,31 +533,13 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
             filename?.takeIf(String::isNotEmpty)?.let { "$VIDEO_ROOT/$CLOUD_SONG_DIR/$it" }.orEmpty()
 
         @JvmStatic
-        fun songDirectories(): List<File> = listOf(
-            File(VIDEO_ROOT, CLOUD_SONG_DIR),
-            File(LEGACY_VIDEO_ROOT, CLOUD_SONG_DIR),
-            File("/storage/emulated/0/muse/mls/video", CLOUD_SONG_DIR),
-        ).distinctBy { it.absolutePath }
+        fun songDirectories(): List<File> = listOf(AppPaths.cloudSongsDir)
 
         @JvmStatic
         fun defaultDbFile(): File = File(DEFAULT_DB_PATH)
 
         private fun findDatabaseFile(): File? {
-            val target = File(DEFAULT_DB_PATH)
-            if (target.exists() && target.canRead()) return target
-            val legacy = listOf(
-                File(LEGACY_DB_PATH),
-                File(FALLBACK_DB_PATH),
-                File(Environment.getExternalStorageDirectory(), "MuseLocalServer/__common/db/muse.db"),
-                File(Environment.getExternalStorageDirectory(), "muse/muse.db"),
-                File("/sdcard/MuseLocalServer/__common/db/muse.db"),
-            ).firstOrNull { it.exists() && it.canRead() } ?: return null
-            return runCatching {
-                target.parentFile?.mkdirs()
-                legacy.copyTo(target, overwrite = false)
-                target
-            }.onFailure { Log.w(TAG, "曲库迁移到麦动目录失败，暂时只读旧曲库", it) }
-                .getOrDefault(legacy)
+            return File(DEFAULT_DB_PATH).takeIf { it.exists() && it.canRead() }
         }
 
         private fun pageArgs(limit: Int, offset: Int) = arrayOf(limit.toString(), offset.toString())

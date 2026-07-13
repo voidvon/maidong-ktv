@@ -64,6 +64,7 @@ class QuickSearchAdapter(
         isClickable = true
         isFocusable = true
         val name = singer.getOrNull(1).orEmpty()
+        contentDescription = "focus:singer:${singer.getOrNull(0) ?: name}"
         val type = singer.getOrNull(2).orEmpty()
         addView(ImageView(context).apply {
             setImageResource(defaultAvatar(type, name))
@@ -83,6 +84,7 @@ class QuickSearchAdapter(
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(32)))
         installPress(this)
         setOnClickListener { onSingerClick(singer) }
+        TvFocusStyler.install(this)
     }
 
     private fun createSongCell(song: Song): View = LinearLayout(context).apply {
@@ -90,6 +92,10 @@ class QuickSearchAdapter(
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(12), dp(3), dp(2), dp(3))
         setBackgroundResource(R.drawable.ott_bg_item)
+        isClickable = true
+        isFocusable = true
+        descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        contentDescription = "focus:song:${song.id ?: song.dbId ?: song.filename ?: "${song.title}|${song.singer}"}"
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
@@ -111,11 +117,13 @@ class QuickSearchAdapter(
         addView(ImageView(context).apply {
             setImageResource(R.drawable.ott_ic_more)
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            isClickable = true
-            setOnClickListener { onSongMore(song) }
+            isClickable = false
+            isFocusable = false
         }, LinearLayout.LayoutParams(dp(40), dp(40)))
         installPress(this)
         setOnClickListener { onSongClick(song) }
+        setOnLongClickListener { onSongMore(song); true }
+        TvFocusStyler.install(this)
     }
 
     private fun installPress(view: View) {

@@ -52,6 +52,7 @@ class SingerGridAdapter(
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             isFocusable = true
             isClickable = true
+            contentDescription = "focus:singer:${singer.getOrNull(0) ?: name}"
 
             val avatar = ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
@@ -83,6 +84,7 @@ class SingerGridAdapter(
                 false
             }
             setOnClickListener { onSingerClick(singer) }
+            TvFocusStyler.install(this)
         }
     }
 

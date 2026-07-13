@@ -51,9 +51,14 @@ object SongOkDownloadManager {
             file.delete()
             song.path = null
         }
-        return (file.exists() && file.length() >= MIN_VALID_FILE_SIZE).also { exists ->
-            if (exists && song.path == null) song.path = file.absolutePath
+        val downloaded = file.exists() && file.length() >= MIN_VALID_FILE_SIZE
+        if (downloaded) {
+            // Catalog rows may still contain their original cloud-songNNNN path.
+            // Once the unified app directory has a verified file, it is the only
+            // valid playback source regardless of the stale non-null catalog path.
+            song.path = file.absolutePath
         }
+        return downloaded
     }
 
     @JvmStatic
@@ -65,7 +70,9 @@ object SongOkDownloadManager {
     @JvmStatic
     fun download(song: Song, callback: DownloadCallback?) {
         if (isDownloaded(song)) {
-            callback?.onDownloadComplete(song, song.path.orEmpty())
+            val localFile = getLocalFile(song)
+            Log.i(TAG, "Using verified local file: ${localFile.absolutePath}, ${localFile.length()} bytes")
+            callback?.onDownloadComplete(song, localFile.absolutePath)
             return
         }
         val key = songKey(song)

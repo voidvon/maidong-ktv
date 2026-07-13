@@ -1,6 +1,5 @@
 package com.local.ktv
 
-import android.os.Environment
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -8,7 +7,7 @@ import java.util.LinkedHashMap
 import java.util.LinkedHashSet
 
 class KtvStore {
-    private val file = File(Environment.getExternalStorageDirectory(), "LocalKTV/state.json")
+    private val file = AppPaths.stateFile
 
     fun stateFile(): File = file
 

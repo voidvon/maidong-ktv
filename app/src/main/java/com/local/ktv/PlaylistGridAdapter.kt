@@ -46,6 +46,7 @@ class PlaylistGridAdapter(
         setBackgroundResource(R.drawable.ott_bg_rank_item_not_selected)
         isClickable = true
         isFocusable = true
+        contentDescription = "focus:playlist:${playlist.getOrNull(0) ?: playlist.getOrNull(1).orEmpty()}"
 
         addView(ImageView(context).apply {
             setImageResource(R.drawable.ic_default_playlist_avatar)
@@ -71,16 +72,8 @@ class PlaylistGridAdapter(
             }
             false
         }
-        onFocusChangeListener = View.OnFocusChangeListener { view, focused ->
-            view.animate()
-                .scaleX(if (focused) 1.04f else 1f)
-                .scaleY(if (focused) 1.04f else 1f)
-                .alpha(if (focused) 1f else 0.92f)
-                .setDuration(100L)
-                .start()
-            view.isSelected = focused
-        }
         setOnClickListener { onPlaylistClick(playlist) }
+        TvFocusStyler.install(this)
     }
 
     private fun dp(value: Int): Int = (value * density + 0.5f).toInt()

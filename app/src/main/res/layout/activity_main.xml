@@ -301,6 +301,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="210dp"
                     android:background="@drawable/bg_player_window"
+                    android:foreground="@drawable/bg_player_focus"
+                    android:foregroundGravity="fill"
                     android:layout_marginBottom="4dp">
 
                     <com.local.ktv.player.KtvVideoView
@@ -634,7 +636,9 @@
                         android:dividerHeight="1dp"
                         android:padding="6dp"
                         android:scrollbars="vertical"
-                        android:cacheColorHint="#00000000" />
+                        android:cacheColorHint="#00000000"
+                        android:descendantFocusability="afterDescendants"
+                        android:listSelector="@android:color/transparent" />
                 </LinearLayout>
 
                 <!-- 底部分页 -->
@@ -707,7 +711,9 @@
                     android:layout_height="0dp"
                     android:layout_weight="1"
                     android:layout_marginBottom="8dp"
-                    android:background="@drawable/bg_player_window">
+                    android:background="@drawable/bg_player_window"
+                    android:foreground="@drawable/bg_player_focus"
+                    android:foregroundGravity="fill">
 
                     <com.local.ktv.player.KtvVideoView
                         android:id="@+id/home_video_background"

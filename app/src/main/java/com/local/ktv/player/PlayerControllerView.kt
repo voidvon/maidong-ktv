@@ -13,6 +13,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.local.ktv.Song
+import com.local.ktv.TvFocusStyler
 
 class PlayerControllerView @JvmOverloads constructor(
     context: Context,
@@ -154,6 +155,7 @@ class PlayerControllerView @JvmOverloads constructor(
                 action()
                 resetAutoHide()
             }
+            TvFocusStyler.install(this)
         }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

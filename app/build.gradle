@@ -80,7 +80,6 @@ configurations.all {
 
 dependencies {
     implementation files('libs/original-ijk-runtime.jar')
-    implementation files('libs/original-thunder-runtime.jar')
     implementation "androidx.core:core:1.12.0"
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.zxing:core:3.5.3"
