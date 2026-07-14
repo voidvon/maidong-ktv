@@ -7161,7 +7161,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * 显示设置对话框 (旧版 Tab 8, 现已改为弹窗)
      */
-    private fun showSettingsPage() {
+    private fun showSettingsPage(requestInitialFocus: Boolean = true) {
         currentTabIndex = 8
         showSubPageShell("主页 / 设置")
         browseMode = "settings"
@@ -7187,7 +7187,7 @@ class MainActivity : AppCompatActivity() {
         val settingsAdapter = SettingsListAdapter(this, entries, R.id.btn_back)
         songList!!.adapter = settingsAdapter
         btnBack?.nextFocusDownId = settingsAdapter.firstActionId
-        settingsAdapter.requestInitialFocus(songList!!)
+        if (requestInitialFocus) settingsAdapter.requestInitialFocus(songList!!)
     }
 
     private fun openSettingsItem(position: Int) {
@@ -7757,7 +7757,11 @@ class MainActivity : AppCompatActivity() {
     private fun showAboutDialog() {
         AlertDialog.Builder(this)
             .setTitle("关于麦动")
-            .setMessage("Power by 杨家三郎\n版本: " + BuildConfig.VERSION_NAME)
+            .setMessage(
+                "power by 抖音@杨家三郎\n" +
+                    "此软件免费开源，请勿付费获取\n" +
+                    "版本：" + BuildConfig.VERSION_NAME
+            )
             .setPositiveButton("确定", null).create().showForTv(DialogInterface.BUTTON_POSITIVE)
     }
 
@@ -8783,7 +8787,7 @@ class MainActivity : AppCompatActivity() {
                 browsePage = savedPage
                 loadCategoryPlaylistPage(savedQuery)
             })
-            "settings" -> ({ showSettingsPage() })
+            "settings" -> ({ showSettingsPage(false) })
             else -> ({ showHomePage() })
         }
         focusReturnStack.addLast(FocusReturnPoint(restorePage, focus, window.decorView.findFocus()))
@@ -8817,6 +8821,15 @@ class MainActivity : AppCompatActivity() {
     private fun restoreFocusBookmark(bookmark: FocusBookmark?, preferredView: View? = null) {
         if (bookmark == null && preferredView == null) return
         val serial = ++focusRestoreSerial
+        val settingsList = songList
+        val settingsAdapter = settingsList?.adapter as? SettingsListAdapter
+        val settingsPosition = bookmark?.marker?.let { marker ->
+            settingsAdapter?.positionForMarker(marker)
+        }
+        if (settingsList != null && settingsAdapter != null && settingsPosition != null) {
+            settingsAdapter.requestFocusAt(settingsList, settingsPosition)
+            return
+        }
         var restored = false
         listOf(0L, 60L, 180L, 450L, 900L).forEach { delay ->
             main.postDelayed({

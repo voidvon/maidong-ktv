@@ -103,12 +103,25 @@ class SettingsListAdapter(
     }
 
     fun requestInitialFocus(list: ListView, onTargetReady: (View) -> Unit = {}) {
+        requestFocusAt(list, 0, onTargetReady)
+    }
+
+    fun positionForMarker(marker: String): Int? {
+        val prefix = "focus:settings:"
+        if (!marker.startsWith(prefix)) return null
+        val title = marker.removePrefix(prefix)
+        return entries.indexOfFirst { it.title == title }.takeIf { it >= 0 }
+    }
+
+    fun requestFocusAt(list: ListView, position: Int, onTargetReady: (View) -> Unit = {}) {
+        if (position !in entries.indices) return
         list.itemsCanFocus = true
         list.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
-        list.setSelection(0)
+        list.setSelection(position)
         list.post {
-            val firstRow = list.getChildAt(0) as? ViewGroup
-            firstRow?.getChildAt(firstRow.childCount - 1)?.let {
+            val rowIndex = position - list.firstVisiblePosition
+            val row = list.getChildAt(rowIndex) as? ViewGroup
+            row?.getChildAt(row.childCount - 1)?.let {
                 onTargetReady(it)
                 if (it.requestFocus() || it.requestFocusFromTouch()) {
                     it.refreshDrawableState()
