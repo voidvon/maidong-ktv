@@ -78,7 +78,7 @@ class SettingsListAdapter(
                         entry.action()
                         post { requestFocus() }
                     }
-                    TvFocusStyler.install(this)
+                    TvFocusStyler.installAction(this)
                 }, LinearLayout.LayoutParams(dp(70), dp(42)))
             } else {
                 addView(label(entry.actionText, 16, Color.WHITE).apply {

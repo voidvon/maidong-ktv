@@ -1,89 +1,52 @@
-# Maidong-KTV
+# Maidong KTV
 
-Maidong-KTV is a karaoke song selection application running on Android devices, supporting both touchscreen and remote control operations. The system provides comprehensive functions for song browsing, playback, and management, making it suitable for home karaoke setups and commercial KTV rooms.
+Maidong KTV is a local karaoke application designed for Android TV and landscape song-selection devices. It provides a complete experience for remote-control navigation, song discovery, queue management, downloads, and stable playback.
 
-## Features
+## Core Features
 
-### Song Management
-- Categorized song browsing (by language, artist, genre, charts, etc.)
-- Song search (by title, artist, Pinyin initials)
-- Song collection and playlist management
-- Download management (supports caching songs locally)
-- USB drive song import
+- Full TV remote navigation with directional keys, confirmation, back, and long-press actions.
+- Consistent focus feedback for buttons, lists, cards, switches, and dialogs.
+- Home entries for charts, song titles, singers, frequently played songs, favorites, categories, and local songs.
+- Online and local search with language filters, paging, and initial-letter keyboard input.
+- Singer browsing with portrait tags and singer-specific song lists.
+- Song ordering, batch ordering, queue prioritization, favorites, and file management.
+- Real-time synchronization across queued, played, and downloaded song lists.
+- New requests join the end of the queue without interrupting the current requested song.
+- Automatic playback when requested songs are available, including smooth transitions from public playback.
 
-### Playback Functions
-- Song playback controls (play, pause, skip, replay)
-- Original audio / backing track switching
-- Volume adjustment (music volume, microphone volume)
-- Multiple audio effect modes (pop, rock, ballad, folk, etc.)
-- Ambient lighting effects
-- Synchronized lyric display
+## Playback
 
-### System Settings
-- Playback mode settings (single loop, sequential play, auto-next)
-- Recording function (records vocal performances)
-- Rating system
-- Screen brightness adjustment
-- Storage space management
-- Automatic cleanup of downloaded files
+- IJK-based playback for local and downloaded songs.
+- Continuous playback while navigating between pages or switching between windowed and full-screen modes.
+- Play, pause, skip, replay, progress display, and seeking controls.
+- Original-vocal and accompaniment switching without changing the current play or pause state.
+- Synchronized playback state across windowed controls, full-screen controls, and status overlays.
+- Song title overlays, temporary mode prompts, and persistent pause indicators.
+- Video ratio, automatic full screen, audio-video synchronization, and public playback settings.
+- Maximum song volume and configurable original-vocal and accompaniment behavior.
 
-### Network & Synchronization
-- Remote smartphone song selection (via local network)
-- Song library synchronization
-- Playback state persistence
+## Downloads And Data
 
-## Technical Architecture
+- Background downloads with progress, resume support, and automatic retry.
+- Automatic cleanup and retry after download or decryption failures.
+- Recognition, counting, and playback of downloaded local songs.
+- Segmented database download, verification, merge, and atomic update.
+- Directory creation, database scanning, and download startup only after storage permission is granted.
+- Local disk and USB song scanning, reserved storage settings, and automatic cleanup.
+- Unified Maidong KTV data storage to avoid conflicts with other applications.
 
-### Core Components
-- **KtvApplication**: Application entry point, responsible for initialization
-- **MainActivity**: Main interface containing all business logic
-- **KtvPlaybackEngine**: Playback engine implemented using IJKPlayer
-- **KtvVideoView**: Video playback component
-- **MuseDatabase**: Song database supporting SQLite
-- **SongLibrary**: Song library management
-- **SongOkDownloadManager**: Download manager
-- **KtvStore**: Configuration storage
-- **KtvStateDatabase**: Playback state database
+## Settings
 
-### Dependencies
-- IJKPlayer: Audio/Video playback
-- OKHttp: Network requests
-- SQLite: Local database
+- Data settings for library updates, local scanning, reserved space, automatic cleanup, and database maintenance.
+- Playback settings for public playback, automatic full screen, video ratio, synchronization, and title overlays.
+- Sound settings for volume behavior, maximum song volume, original vocals, and accompaniment.
+- Interface settings for language, floating controls, carousel content, and song title overlays.
+- Dialog selections remain temporary until confirmed and provide clear remote-control focus feedback.
 
-## Project Structure
+## Interface And Interaction
 
-```
-app/src/main/java/com/local/ktv/
-├── MainActivity.kt          # Main interface and business logic
-├── KtvApplication.kt        # Application entry point
-├── Song.kt                  # Song data model
-├── MuseDatabase.kt          # Song database
-├── SongLibrary.kt           # Song library management
-├── SongApiClient.kt         # Song API client
-├── SongOkDownloadManager.kt # Download manager
-├── KtvStore.kt              # Configuration storage
-├── KtvStateDatabase.kt      # State database
-├── KtvVideoView.kt          # Video playback component
-├── KtvPlaybackEngine.kt     # Playback engine
-├── LocalRemoteServer.kt     # Remote server
-├── DownloadTask.kt          # Download task
-├── CatalogClient.kt         # Catalog client
-├── TsDecryptor.kt           # TS video decryption
-├── player/                  # Player-related components
-├── BootReceiver.kt          # Boot receiver
-└── adapters/                # List adapters
-```
-
-## Usage Instructions
-
-1. **Installation**: Install the app on an Android device
-2. **Initialization**: On first launch, the song database will be automatically downloaded
-3. **Song Selection**: Choose songs via touchscreen or remote control
-4. **Playback**: Songs begin playing automatically after selection
-5. **Control**: Use the bottom control bar or remote control for playback operations
-
-## System Requirements
-
-- Android 5.0+
-- Touchscreen or remote control support
-- Recommended: Sufficient storage space for song caching
+- Landscape TV layout optimized for long-distance viewing.
+- Consistent state and meaning across top, windowed, and full-screen playback controls.
+- Stable focus during list refreshes, paging, tab changes, and song ordering.
+- Focus changes color only and preserves each control's original dimensions, corners, and layout.
+- A consistent circular Maidong logo across the home screen, player, and application information.

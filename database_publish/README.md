@@ -1,24 +1,10 @@
-# Maidong KTV database
+# 麦动 KTV 数据库分发
 
-`muse.db` is published as 10 MiB chunks because the complete database is
-969,072,640 bytes. The Android client downloads `manifest.json`, appends each
-chunk in order, verifies the final size and SHA-256, then atomically installs
-the database.
+该目录用于发布麦动 KTV 曲库数据库，提供以下功能：
 
-Expected SHA-256:
-
-```text
-592ca5c656638d33e93062f8fc1eba06b1151990ee00d96c7b8d197890503394
-```
-
-Repository layout expected by the client:
-
-```text
-database/manifest.json
-database/muse.db.part000
-database/muse.db.part001
-...
-database/muse.db.part092
-```
-
-The unsplit `muse.db` is intentionally excluded from Git.
+- 将完整曲库拆分为适合网络分发的数据库分片。
+- 通过清单描述数据库版本、分片顺序、文件大小和完整性信息。
+- 支持客户端按顺序下载、断点恢复和失败重试。
+- 下载完成后校验数据库完整性并自动合并安装。
+- 使用原子替换方式更新本地曲库，避免更新中断损坏现有数据库。
+- 完整数据库文件保留在本地，不直接提交到 Git 仓库。

@@ -38,19 +38,36 @@ class SongListAdapter(
     private val songs: List<Song>,
     private val mode: String,
     private val pageOffset: Int,
+    private val previousPageFocusId: Int,
+    private val nextPageFocusId: Int,
     private val stateFor: (Song) -> SongRowState,
     private val callbacks: SongListCallbacks,
 ) : BaseAdapter() {
     private val density = context.resources.displayMetrics.density
     private val columns = if (mode in SINGLE_COLUMN_MODES) 1 else 2
+    private val cardIds = HashMap<String, Int>()
+
+    private fun cardId(index: Int): Int = cardIds.getOrPut(songKey(songs[index])) { View.generateViewId() }
 
     override fun getCount(): Int = ceil(songs.size / columns.toDouble()).toInt()
     override fun getItem(position: Int): Any = position
-    override fun getItemId(position: Int): Long = position.toLong()
+    override fun getItemId(position: Int): Long = songKey(songs[position * columns]).hashCode().toLong()
+    override fun hasStableIds(): Boolean = true
+
+    fun matches(renderMode: String, renderPageOffset: Int): Boolean =
+        mode == renderMode && pageOffset == renderPageOffset
+
+    fun adapterPositionFor(focusMarker: String): Int? {
+        val key = focusMarker.removePrefix(FOCUS_PREFIX)
+        val index = songs.indexOfFirst { songKey(it) == key }
+        return index.takeIf { it >= 0 }?.div(columns)
+    }
 
     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
         if (columns == 1) {
-            return createSingleRow(songs[position], position)
+            return createSingleRow(songs[position], position).apply {
+                if (position == count - 1) nextFocusDownId = previousPageFocusId
+            }
         }
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -58,7 +75,9 @@ class SongListAdapter(
             val cells = mutableListOf<View>()
             repeat(2) { column ->
                 val index = position * 2 + column
-                val cell = songs.getOrNull(index)?.let { createCatalogCell(it) } ?: View(context)
+                val cell = songs.getOrNull(index)?.let {
+                    createCatalogCell(it, index, column, position == count - 1)
+                } ?: View(context)
                 cells += cell
                 addView(
                     cell,
@@ -73,10 +92,10 @@ class SongListAdapter(
         "ordered" -> createOrderedRow(song, index)
         "downloads" -> createDownloadRow(song, index)
         "sang" -> createSangRow(song, index)
-        else -> createCatalogCell(song)
+        else -> createCatalogCell(song, index, 0, index == count - 1)
     }
 
-    private fun createCatalogCell(song: Song): View {
+    private fun createCatalogCell(song: Song, songIndex: Int, column: Int, lastRow: Boolean): View {
         val state = stateFor(song)
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -89,7 +108,14 @@ class SongListAdapter(
                 addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download, null), LinearLayout.LayoutParams(dp(40), dp(40)))
             }
             addView(icon(R.drawable.ott_ic_more, null), LinearLayout.LayoutParams(dp(40), dp(40)))
-            configureSongCard(this, song)
+            configureSongCard(this, song, songIndex)
+            if (songIndex >= columns) nextFocusUpId = cardId(songIndex - columns)
+            if (column == 1) nextFocusLeftId = cardId(songIndex - 1)
+            if (column == 0 && songIndex + 1 < songs.size) nextFocusRightId = cardId(songIndex + 1)
+            if (!lastRow && songIndex + columns < songs.size) nextFocusDownId = cardId(songIndex + columns)
+            if (lastRow) {
+                nextFocusDownId = if (column == 0) previousPageFocusId else nextPageFocusId
+            }
         }
     }
 
@@ -114,7 +140,7 @@ class SongListAdapter(
                 addView(icon(if (state.queued) R.drawable.ic_order_song else R.drawable.ott_ic_download, null), LinearLayout.LayoutParams(dp(40), dp(40)))
             }
             addView(icon(R.drawable.ott_ic_more, null), LinearLayout.LayoutParams(dp(40), dp(40)))
-            configureSongCard(this, song)
+            configureSongCard(this, song, index)
         }
     }
 
@@ -134,7 +160,7 @@ class SongListAdapter(
                 addView(icon(R.drawable.ic_add_to_top) { callbacks.onTop(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
                 addView(icon(R.drawable.ic_delete) { callbacks.onDelete(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
             }
-            configureSongCard(this, song)
+            configureSongCard(this, song, index)
         }
     }
 
@@ -168,7 +194,7 @@ class SongListAdapter(
                 )
             }
             addView(icon(R.drawable.ic_delete) { callbacks.onDelete(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-            configureSongCard(this, song)
+            configureSongCard(this, song, index)
         }
     }
 
@@ -179,7 +205,7 @@ class SongListAdapter(
         addView(text((index + 1).toString(), 16, Color.WHITE, Gravity.CENTER), LinearLayout.LayoutParams(dp(47), dp(48)))
         addView(songInfo(song, stacked = false), LinearLayout.LayoutParams(0, dp(48), 1f))
         addView(icon(R.drawable.ic_order_song) { callbacks.onPrimary(song) }, LinearLayout.LayoutParams(dp(36), dp(36)))
-        configureSongCard(this, song)
+        configureSongCard(this, song, index)
     }
 
     private fun songInfo(song: Song, stacked: Boolean): View = LinearLayout(context).apply {
@@ -216,9 +242,9 @@ class SongListAdapter(
         }
     }
 
-    private fun configureSongCard(card: View, song: Song) {
-        if (card.id == View.NO_ID) card.id = View.generateViewId()
-        card.contentDescription = "focus:song:${song.id ?: song.dbId ?: song.filename ?: "${song.title}|${song.singer}"}"
+    private fun configureSongCard(card: View, song: Song, songIndex: Int) {
+        card.id = cardId(songIndex)
+        card.contentDescription = FOCUS_PREFIX + songKey(song)
         (card as? ViewGroup)?.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
         installPressAnimation(card)
         card.setOnClickListener { callbacks.onPrimary(song) }
@@ -243,6 +269,10 @@ class SongListAdapter(
     private fun dp(value: Int): Int = (value * density + 0.5f).toInt()
 
     companion object {
+        const val FOCUS_PREFIX = "focus:song:"
         private val SINGLE_COLUMN_MODES = setOf("rank", "ordered", "downloads", "sang")
+
+        private fun songKey(song: Song): String =
+            (song.id ?: song.dbId ?: song.filename ?: "${song.title}|${song.singer}").toString()
     }
 }

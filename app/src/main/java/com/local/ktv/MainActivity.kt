@@ -13,6 +13,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaPlayer.OnCompletionListener
@@ -191,6 +192,7 @@ class MainActivity : AppCompatActivity() {
     }
     private var search: EditText? = null
     private var songList: ListView? = null
+    private var modernSongAdapter: SongListAdapter? = null
     private var queueList: ListView? = null
     private var songAdapter: ArrayAdapter<String?>? = null
     private var queueAdapter: ArrayAdapter<String?>? = null
@@ -710,7 +712,7 @@ class MainActivity : AppCompatActivity() {
         // 同步当前歌曲信息到控制层(若已在播放)
         if (currentSong != null) {
             playerController!!.updateSongInfo(currentSong)
-            playerController!!.updatePlayState(player?.isPlaying == true)
+            playerController!!.updatePlayState(playWhenPrepared)
             playerController!!.setVocalMode(originalVocal)
         }
         lyricCurrent = label("暂无歌词", 22, GOLD)
@@ -1362,6 +1364,11 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             window?.decorView?.let(TvFocusStyler::installTree)
+            listOf(
+                DialogInterface.BUTTON_NEGATIVE,
+                DialogInterface.BUTTON_POSITIVE,
+                DialogInterface.BUTTON_NEUTRAL,
+            ).mapNotNull(::getButton).forEach(TvFocusStyler::installAction)
             val preferred = getButton(preferredButton)
                 ?: getButton(DialogInterface.BUTTON_NEGATIVE)
                 ?: getButton(DialogInterface.BUTTON_POSITIVE)
@@ -1716,6 +1723,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleOriginalVocal() {
+        val shouldPlay = playWhenPrepared
         originalVocal = !originalVocal
         applyPlaybackMode()
         saveState()
@@ -1726,9 +1734,18 @@ class MainActivity : AppCompatActivity() {
         }
         // 更新 TV 布局底部控制栏
         if (textVocalMode != null) {
-            textVocalMode.setText(if (originalVocal) "原唱" else "伴唱")
+            textVocalMode.setText(vocalActionText())
         }
-        updateBottomBar(currentSong, player?.isPlaying == true)
+        updateBottomBar(currentSong, shouldPlay)
+    }
+
+    /** The control label describes the action, while the transient notice describes the active mode. */
+    private fun vocalActionText(): String = if (originalVocal) "伴唱" else "原唱"
+
+    private fun vocalActionIcon(): Int = if (originalVocal) {
+        R.drawable.ott_ic_ctrl_music_accomp
+    } else {
+        R.drawable.ott_ic_ctrl_music_origin
     }
 
     /**
@@ -1760,12 +1777,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onVocalSwitch(original: Boolean) {
+                val shouldPlay = playWhenPrepared
                 originalVocal = original
                 applyPlaybackMode()
                 saveState()
                 showPlaybackModeNotice(if (originalVocal) "原唱" else "伴唱")
                 playerController!!.setVocalMode(originalVocal)
-                updateBottomBar(currentSong, player?.isPlaying == true)
+                updateBottomBar(currentSong, shouldPlay)
             }
 
             override fun onVolume() {
@@ -1822,8 +1840,11 @@ class MainActivity : AppCompatActivity() {
         val controls = LinearLayout(this)
         controls.orientation = LinearLayout.HORIZONTAL
         controls.gravity = Gravity.CENTER
+        controls.clipChildren = false
+        controls.clipToPadding = false
         controls.setPadding(dp(8), dp(4), dp(8), dp(4))
         controls.background = roundedBg(Color.argb(218, 4, 15, 28), 5, Color.argb(35, 255, 255, 255), 1)
+        val controlItems = ArrayList<View>(7)
 
         fun addControl(iconRes: Int, text: String, action: () -> Unit): Pair<TextView, ImageView> {
             val item = LinearLayout(this).apply {
@@ -1831,6 +1852,9 @@ class MainActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER
                 isFocusable = true
                 setBackgroundColor(Color.TRANSPARENT)
+                id = View.generateViewId()
+                clipChildren = false
+                clipToPadding = false
             }
             val icon = ImageView(this).apply {
                 setImageResource(iconRes)
@@ -1849,6 +1873,7 @@ class MainActivity : AppCompatActivity() {
                 if (isFullScreen) setFullScreenChromeVisible(true)
             }
             installPressFeedback(item)
+            controlItems.add(item)
             val params = LinearLayout.LayoutParams(dp(68), dp(66))
             params.setMargins(dp(1), 0, dp(1), 0)
             controls.addView(item, params)
@@ -1861,8 +1886,8 @@ class MainActivity : AppCompatActivity() {
             showOrderListPage()
         }
         addControl(
-            if (originalVocal) R.drawable.ott_ic_ctrl_music_origin else R.drawable.ott_ic_ctrl_music_accomp,
-            if (originalVocal) "原唱" else "伴唱"
+            vocalActionIcon(),
+            vocalActionText()
         ) {
             toggleOriginalVocal()
         }.also { (text, icon) -> fullScreenVocalText = text; fullScreenVocalIcon = icon }
@@ -1873,6 +1898,13 @@ class MainActivity : AppCompatActivity() {
         ) { togglePlay() }.also { (text, icon) -> fullScreenPauseText = text; fullScreenPauseIcon = icon }
         addControl(R.drawable.ott_ic_ctrl_replay, "重唱") { replay() }
         addControl(R.drawable.ott_ic_ctrl_volume, "调音") { showFullScreenVolumeDialog() }
+
+        controlItems.forEachIndexed { index, item ->
+            item.nextFocusLeftId = controlItems.getOrNull(index - 1)?.id ?: item.id
+            item.nextFocusRightId = controlItems.getOrNull(index + 1)?.id ?: item.id
+            item.nextFocusUpId = item.id
+            item.nextFocusDownId = item.id
+        }
 
         val controlsParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, dp(74), Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -2275,18 +2307,14 @@ class MainActivity : AppCompatActivity() {
         bindAtmospherePreset(root, R.id.btn_preset_rock, "摇滚")
         bindAtmospherePreset(root, R.id.btn_preset_singer, "唱将")
 
-        dialog.setOnShowListener(OnShowListener { ignored: DialogInterface? ->
-            if (dialog.getWindow() != null) {
-                dialog.getWindow()!!.setBackgroundDrawableResource(android.R.color.transparent)
-                val params = dialog.getWindow()!!.getAttributes()
-                params.dimAmount = 0.72f
-                dialog.getWindow()!!.setAttributes(params)
-                dialog.getWindow()!!.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        dialog.showForTv(afterShow = {
+            dialog.window?.apply {
+                setBackgroundDrawableResource(android.R.color.transparent)
+                attributes = attributes.apply { dimAmount = 0.72f }
+                addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             }
-            root.findViewById<View>(R.id.btn_tuning_close).requestFocus()
+            root.findViewById<View>(R.id.btn_tone_down).requestFocus()
         })
-        dialog.restoreSourceFocusOnDismiss()
-        dialog.show()
         return true
     }
 
@@ -4176,21 +4204,21 @@ class MainActivity : AppCompatActivity() {
         if (playing && playbackModeNotice?.text?.contains("暂停") == true) hidePlaybackNoticeNow()
         if (playerSongTitle != null) playerSongTitle!!.setText(if (song != null) song.title else "未播放")
         if (playerSongSinger != null) playerSongSinger!!.setText(if (song != null) (if (song.singer != null) song.singer else "") else "")
-        if (textVocalMode != null) textVocalMode.setText(if (originalVocal) "原唱" else "伴唱")
+        if (textVocalMode != null) textVocalMode.setText(vocalActionText())
         if (textPlayPause != null) textPlayPause.setText(if (playing) "暂停" else "播放")
         if (btnTopPause != null) btnTopPause!!.setText(if (playing) "暂停" else "播放")
-        if (btnTopVocal != null) btnTopVocal!!.setText(if (originalVocal) "原唱" else "伴唱")
+        if (btnTopVocal != null) btnTopVocal!!.setText(vocalActionText())
         setTopControlIcon(btnTopPause, if (playing) R.drawable.ott_ic_ctrl_pause else R.drawable.ott_ic_ctrl_play)
         setTopControlIcon(
             btnTopVocal,
-            if (originalVocal) R.drawable.ott_ic_ctrl_music_origin else R.drawable.ott_ic_ctrl_music_accomp,
+            vocalActionIcon(),
         )
         fullScreenPauseText?.text = if (playing) "暂停" else "播放"
         fullScreenPauseIcon?.setImageResource(if (playing) R.drawable.ott_ic_ctrl_pause else R.drawable.ott_ic_ctrl_play)
-        fullScreenVocalText?.text = if (originalVocal) "原唱" else "伴唱"
-        fullScreenVocalIcon?.setImageResource(
-            if (originalVocal) R.drawable.ott_ic_ctrl_music_origin else R.drawable.ott_ic_ctrl_music_accomp
-        )
+        fullScreenVocalText?.text = vocalActionText()
+        fullScreenVocalIcon?.setImageResource(vocalActionIcon())
+        playerController?.updatePlayState(playing)
+        playerController?.setVocalMode(originalVocal)
         syncPlayerInfo()
         updateOrderBadge()
     }
@@ -4568,7 +4596,7 @@ class MainActivity : AppCompatActivity() {
                 runCatching {
                     vocalPlayer!!.seekTo(pendingVocalPosition)
                     applyVocalVolume()
-                    if (player?.isPlaying == true) startVocalIfReady()
+                    if (playWhenPrepared) startVocalIfReady() else pauseVocalIfReady()
                 }
             }
             return true
@@ -4591,7 +4619,7 @@ class MainActivity : AppCompatActivity() {
                 vocalPlayerPrepared = true
                 if (pendingVocalPosition > 0) runCatching { preparedPlayer.seekTo(pendingVocalPosition) }
                 applyVocalVolume()
-                if (player?.isPlaying == true) startVocalIfReady()
+                if (playWhenPrepared) startVocalIfReady() else pauseVocalIfReady()
             }
             candidate.setOnErrorListener { failedPlayer, _, _ ->
                 if (vocalPlayer === failedPlayer) releaseVocalPlayer()
@@ -4787,6 +4815,7 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             isFocusable = true
             isClickable = true
+            setBackgroundResource(R.drawable.bg_song_action_focus)
             addView(ImageView(this@MainActivity).apply {
                 setImageResource(iconRes)
                 iconTint?.let { imageTintList = ColorStateList.valueOf(it) }
@@ -5664,9 +5693,10 @@ class MainActivity : AppCompatActivity() {
             btnTopSearch, btnTopOrder, btnTopVocal, btnTopNext, btnTopPause, btnTopReplay, btnTopTone,
             btnBottomGuess, btnBottomSettings, btnBottomExit, btnBack, btnPrevPage, btnNextPage,
             homeCardRank, homeCardSong, homeCardSinger, homeCardLocal, homeCardRegular,
-            homeCardFavorite, homeCardCategory, homePoster,
-            homePlayerHost,
+            homeCardFavorite, homeCardCategory,
         ).forEach(::installPressFeedback)
+        listOfNotNull(homePlayerHost, subPagePlayerHost, homePoster).forEach(TvFocusStyler::preserveBackground)
+        (homePoster as? FrameLayout)?.foreground = getDrawable(R.drawable.bg_player_focus)
         configureTvFocusNavigation()
         prepareTvFocusableTree(window.decorView)
 
@@ -5695,7 +5725,6 @@ class MainActivity : AppCompatActivity() {
                         toast("正在播放: " + song.title)
                     } else {
                         moveQueuedSongToNext(song)
-                        renderSongList()
                     }
                 } else if (currentTabIndex == 5) {
                     // 已唱历史: 重新点歌
@@ -6418,15 +6447,30 @@ class MainActivity : AppCompatActivity() {
      * 更新 Tab 样式(选中/未选中)
      */
     private fun updateTabStyle(tab: TextView, selected: Boolean) {
-        if (selected) {
-            tab.setTextColor(Color.rgb(253, 51, 89))
-            val gd = GradientDrawable()
-            gd.setColor(Color.argb(30, 253, 51, 89))
-            gd.setCornerRadius(dp(4).toFloat())
-            tab.setBackground(gd)
-        } else {
-            tab.setTextColor(Color.argb(180, 241, 241, 241))
-            tab.setBackgroundColor(Color.TRANSPARENT)
+        val normalText = if (selected) Color.rgb(253, 51, 89) else Color.argb(180, 241, 241, 241)
+        tab.setTextColor(ColorStateList(
+            arrayOf(
+                intArrayOf(android.R.attr.state_focused),
+                intArrayOf(android.R.attr.state_pressed),
+                intArrayOf(),
+            ),
+            intArrayOf(Color.WHITE, Color.WHITE, normalText),
+        ))
+        val normal = GradientDrawable().apply {
+            setColor(if (selected) Color.argb(30, 253, 51, 89) else Color.TRANSPARENT)
+            cornerRadius = dp(4).toFloat()
+        }
+        val focused = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.rgb(232, 49, 111), Color.rgb(255, 154, 48)),
+        ).apply {
+            cornerRadius = dp(4).toFloat()
+            setStroke(dp(1), Color.argb(150, 255, 255, 255))
+        }
+        tab.background = StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_focused), focused)
+            addState(intArrayOf(android.R.attr.state_pressed), focused)
+            addState(intArrayOf(), normal)
         }
     }
 
@@ -7393,7 +7437,7 @@ class MainActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     dp(48),
                 )
-                TvFocusStyler.install(this)
+                TvFocusStyler.installAction(this)
             })
         }
         setOnCheckedChangeListener { group, checkedId ->
@@ -7423,7 +7467,7 @@ class MainActivity : AppCompatActivity() {
                     dp(48),
                 )
                 setOnCheckedChangeListener { _, value -> checked[index] = value }
-                TvFocusStyler.install(this)
+                TvFocusStyler.installAction(this)
             })
         }
     }
@@ -7530,6 +7574,7 @@ class MainActivity : AppCompatActivity() {
                         minHeight = 0
                         setPadding(0, 0, dp(6), 0)
                         layoutParams = android.widget.RadioGroup.LayoutParams(-2, dp(30))
+                        TvFocusStyler.installAction(this)
                     })
                 }
                 setOnCheckedChangeListener { group, checkedId ->
@@ -7537,17 +7582,21 @@ class MainActivity : AppCompatActivity() {
                     changed(index)
                 }
             }
+        val musicVolumeTitle = title("歌曲最大音量  ${pendingMusicVolume}%")
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(title("切到公播歌曲时音量："))
             addView(choices(arrayOf("跟随上首音量", "跟随上首公播歌曲音量"), pendingPubVolumeMode) { pendingPubVolumeMode = it })
             addView(title("切到点播歌曲时音量："))
             addView(choices(arrayOf("跟随上首音量", "跟随上首点播歌曲音量"), pendingOrderedVolumeMode) { pendingOrderedVolumeMode = it })
-            addView(title("歌曲最大音量  ${pendingMusicVolume}%"))
+            addView(musicVolumeTitle)
             addView(SeekBar(this@MainActivity).apply {
                 max = 100; progress = pendingMusicVolume
                 setOnSeekBarChangeListener(object : OnSeekBarChangeListener {
-                    override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) { if (fromUser) pendingMusicVolume = value }
+                    override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                        pendingMusicVolume = value
+                        musicVolumeTitle.text = "歌曲最大音量  ${pendingMusicVolume}%"
+                    }
                     override fun onStartTrackingTouch(bar: SeekBar?) = Unit
                     override fun onStopTrackingTouch(bar: SeekBar?) = Unit
                 })
@@ -8061,8 +8110,12 @@ class MainActivity : AppCompatActivity() {
      * 渲染歌曲列表
      */
     private fun renderSongList() {
-        val focusedSong = window.decorView.findFocus()?.takeIf { isDescendantOf(it, songList) }
-            ?.let(::captureFocusBookmark)
+        val list = songList ?: return
+        val focusedView = window.decorView.findFocus()?.takeIf { isDescendantOf(it, list) }
+        val focusedMarker = focusedView?.contentDescription?.toString()
+            ?.takeIf { it.startsWith(SongListAdapter.FOCUS_PREFIX) }
+        val oldSelectedPosition = list.selectedItemPosition
+        val oldFocusedTop = focusedView?.top
         if (browseMode == "ordered") {
             visibleSongs.clear()
             visibleSongs.addAll(orderQueue.orEmpty())
@@ -8071,21 +8124,24 @@ class MainActivity : AppCompatActivity() {
             visibleSongs.addAll(sangHistory)
         }
         if (visibleSongs.isEmpty()) {
-            songList!!.adapter = tvAdapter().apply { add("暂无歌曲") }
-            restoreFocusBookmark(focusedSong)
+            modernSongAdapter = null
+            list.adapter = tvAdapter().apply { add("暂无歌曲") }
             return
         }
-        songList!!.dividerHeight = 0
+        list.dividerHeight = 0
         val mode = when (browseMode) {
             "rank", "ordered", "downloads", "sang" -> browseMode
             else -> "catalog"
         }
         val pageOffset = if (mode == "rank") browsePage * browsePageSize() else 0
-        val listAdapter = SongListAdapter(
+        val existing = modernSongAdapter?.takeIf { it.matches(mode, pageOffset) && list.adapter === it }
+        val listAdapter = existing ?: SongListAdapter(
             this,
             visibleSongs,
             mode,
             pageOffset,
+            btnPrevPage?.id ?: View.NO_ID,
+            btnNextPage?.id ?: View.NO_ID,
             { song -> songRowState(song) },
             SongListCallbacks(
                 onPrimary = { song -> handleSongPrimary(song) },
@@ -8097,9 +8153,37 @@ class MainActivity : AppCompatActivity() {
                 },
                 onPauseResume = { song -> toggleDownloadPause(song) },
             ),
-        )
-        songList!!.adapter = listAdapter
-        restoreFocusBookmark(focusedSong)
+        ).also {
+            modernSongAdapter = it
+            list.adapter = it
+        }
+        if (existing != null) listAdapter.notifyDataSetChanged()
+
+        val targetPosition = focusedMarker?.let(listAdapter::adapterPositionFor)
+            ?: oldSelectedPosition.takeIf { it >= 0 }
+        if (targetPosition != null && focusedMarker != null) {
+            list.setSelectionFromTop(targetPosition, oldFocusedTop ?: 0)
+            list.post {
+                if (list.adapter !== listAdapter) return@post
+                list.setSelection(targetPosition)
+                val row = list.getChildAt(targetPosition - list.firstVisiblePosition)
+                val target = row?.let { findViewByContentDescription(it, focusedMarker) }
+                if (target != null) {
+                    target.requestFocus()
+                    target.refreshDrawableState()
+                    target.jumpDrawablesToCurrentState()
+                    target.invalidate()
+                }
+            }
+        }
+    }
+
+    private fun findViewByContentDescription(root: View, marker: String): View? {
+        if (root.contentDescription?.toString() == marker) return root
+        if (root is ViewGroup) repeat(root.childCount) { index ->
+            findViewByContentDescription(root.getChildAt(index), marker)?.let { return it }
+        }
+        return null
     }
 
     private fun songRowState(song: Song): SongRowState {
@@ -8117,17 +8201,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleSongPrimary(song: Song) {
+        var rendered = false
         when (browseMode) {
             "ordered" -> {
                 if (currentSong?.equals(song) == true) toast("正在播放: ${song.title}")
                 else moveQueuedSongToNext(song)
+                rendered = true
             }
             "downloads" -> addToQueue(song)
             "sang" -> addToQueue(song)
             else -> addToQueue(song)
         }
         persistRuntimeState()
-        renderSongList()
+        if (!rendered) renderSongList()
     }
 
     private fun moveQueuedSongToNext(song: Song) {

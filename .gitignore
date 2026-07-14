@@ -2,8 +2,15 @@
 .idea/
 local.properties
 **/build/
-*.png
+app/release/
+*.apk
+/*.png
+/*.xml
+/*.log
+/*.txt
+.codex-*
+captures/
+**/captures/
 *.xml.bak
 database_publish/muse.db
 database_publish/muse.db.reassembled
-
