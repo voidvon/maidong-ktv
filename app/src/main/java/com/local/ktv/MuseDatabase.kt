@@ -36,7 +36,7 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
 
     fun dbFile(): File? = sourceFile
 
-    fun songCount(): Int = count("SELECT COUNT(*) FROM songs WHERE cloud_url IS NOT NULL AND cloud_url != '' AND deleted_at IS NULL")
+    fun songCount(): Int = count("SELECT COUNT(*) FROM songs WHERE deleted_at IS NULL")
 
     fun singerCount(): Int = count("SELECT COUNT(*) FROM singers WHERE deleted_at IS NULL AND name != ''")
 
@@ -83,7 +83,7 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
             ""
         }
         return count(
-            "SELECT COUNT(*) FROM songs WHERE cloud_url IS NOT NULL AND cloud_url != '' AND deleted_at IS NULL " +
+            "SELECT COUNT(*) FROM songs WHERE deleted_at IS NULL " +
                 "AND $condition$languageCondition",
             args.toTypedArray(),
         )
@@ -167,7 +167,7 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
         songCount()
     } else {
         count(
-            "SELECT COUNT(*) FROM songs WHERE cloud_url IS NOT NULL AND cloud_url != '' AND deleted_at IS NULL AND lang=?",
+            "SELECT COUNT(*) FROM songs WHERE deleted_at IS NULL AND lang=?",
             arrayOf(language),
         )
     }
@@ -184,7 +184,7 @@ class MuseDatabase @JvmOverloads constructor(initialSourceFile: File? = null) {
     fun countByWordCount(wordCount: Int): Int {
         if (wordCount <= 0) return songCount()
         val condition = if (wordCount >= 6) "name_len >= 6" else "name_len = $wordCount"
-        return count("SELECT COUNT(*) FROM songs WHERE cloud_url IS NOT NULL AND cloud_url != '' AND deleted_at IS NULL AND $condition")
+        return count("SELECT COUNT(*) FROM songs WHERE deleted_at IS NULL AND $condition")
     }
 
     fun languages(): MutableList<String> = stringRows(

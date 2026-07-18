@@ -1,6 +1,7 @@
 package com.local.ktv
 
 import android.content.Context
+import android.os.Looper
 import android.util.Log
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -17,7 +18,7 @@ object SongApiClient {
     private const val TAG = "SongApiClient"
 
     private var bridge: KtvJsBridge? = null
-    private var ready = false
+    @Volatile private var ready = false
 
     @JvmStatic
     fun init(context: Context) {
@@ -44,20 +45,44 @@ object SongApiClient {
 
     @JvmStatic
     fun getSongDownloadUrl(musicno: String, resolution: String, h265: Boolean): String? {
-        if (!ready || bridge == null) {
-            Log.w(TAG, "Bridge not ready")
-            return null
+        // 主线程同步等待 WebView 回调会死锁；当前播放/下载流程会在 IO 线程调用这里。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.w(TAG, "Synchronous JS request on main thread; using DB fallback")
+            return fetchFromDb(musicno)
         }
-        // 全部走 JS Bridge 实时获取
+        // 等 Bridge 就绪 (最多 3 秒)
+        var waited = 0
+        while (!ready && waited < 30) {
+            try { Thread.sleep(100) } catch (_: Exception) {}
+            waited++
+        }
+        if (!ready || bridge == null) {
+            Log.w(TAG, "Bridge not ready after ${waited*100}ms, DB fallback")
+            return fetchFromDb(musicno)
+        }
         val result = AtomicReference<String?>()
         val latch = CountDownLatch(1)
-        bridge?.getSongUrl(musicno) { url ->
-            result.set(url)
-            latch.countDown()
+        bridge?.getSongUrl(musicno, resolution, h265) { url -> result.set(url); latch.countDown() }
+        // JS 内部有 12s 超时，这里等 15s
+        try {
+            latch.await(23, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
-        try { latch.await(15, TimeUnit.SECONDS) }
-        catch (_: InterruptedException) {}
-        return result.get()
+        return result.get() ?: fetchFromDb(musicno)
+    }
+
+    /** DB cloud_url fallback */
+    private fun fetchFromDb(musicno: String): String? {
+        try {
+            val db = MuseDatabase()
+            if (db.open()) {
+                val url = db.getCloudUrl(musicno)
+                db.close()
+                return url
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     @JvmStatic

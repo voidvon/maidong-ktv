@@ -11,8 +11,8 @@ android {
         applicationId "com.local.ktv"
         minSdk 21
         targetSdk 25
-        versionCode 2
-        versionName "1.1.0"
+        versionCode 3
+        versionName "1.2.0"
         def manifestUrl = project.findProperty("GITEE_DATABASE_MANIFEST_URL") ?: ""
         buildConfigField "String", "GITEE_DATABASE_MANIFEST_URL", "\"${manifestUrl}\""
         def giteeToken = project.findProperty("GITEE_DATABASE_TOKEN") ?: ""
