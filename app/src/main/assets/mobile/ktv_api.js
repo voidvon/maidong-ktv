@@ -12,6 +12,8 @@
 (function(global) {
   'use strict';
 
+  // KTV_BRIDGE_API: 2 (Android 缓存校验标记，请勿删除)
+
   // ─── 配置 ──────────────────────────────────────────
   const CONFIG = {
     APP_ID:  'd4eeacc6cec3434fbc8c41608a3056a0',
@@ -35,94 +37,96 @@
   }
 
   // ─── MD5 ───────────────────────────────────────────
-  function md5(string) {
-    function r(n,c){return(n<<c)|(n>>>(32-c));}
-    function q(x,y){var l=(x&0xFFFF)+(y&0xFFFF);var m=(x>>16)+(y>>16)+(l>>16);return(m<<16)|(l&0xFFFF);}
-    function f(x,y,z){return(x&y)|((~x)&z);}
-    function g(x,y,z){return(x&z)|(y&(~z));}
-    function h(x,y,z){return x^y^z;}
-    function i(x,y,z){return y^(x|(~z));}
-    function ff(a,b,c,d,x,s,t){return q(r(q(q(a,f(b,c,d)),q(x,t)),s),b);}
-    function gg(a,b,c,d,x,s,t){return q(r(q(q(a,g(b,c,d)),q(x,t)),s),b);}
-    function hh(a,b,c,d,x,s,t){return q(r(q(q(a,h(b,c,d)),q(x,t)),s),b);}
-    function ii(a,b,c,d,x,s,t){return q(r(q(q(a,i(b,c,d)),q(x,t)),s),b);}
-    function cvt(str){
-      var out=[],len=str.length;
-      for(var i=0;i<len;){var c=str.charCodeAt(i++);
-        if(c<128)out.push(c);
-        else if(c<2048){out.push((c>>6)|192);out.push((c&63)|128);}
-        else{out.push((c>>12)|224);out.push(((c>>6)&63)|128);out.push((c&63)|128);}
-      }return out;
+  function md5(input) {
+    function add(a, b) {
+      var low = (a & 0xffff) + (b & 0xffff);
+      var high = (a >>> 16) + (b >>> 16) + (low >>> 16);
+      return (high << 16) | (low & 0xffff);
     }
-    var b=cvt(string),a=1732584193,b1=-271733879,b2=-1732584194,b3=271733878,i,olda,oldb,oldc,oldd;
-    for(i=0;i<b.length;i+=64){
-      var x=[],j;
-      for(j=0;j<64;j++)x[j]=i+j<b.length?b[i+j]:0;
-      olda=a;oldb=b1;oldc=b2;oldd=b3;
-      a=ff(a,b1,b2,b3,x[0],7,-680876936);b3=ff(b3,a,b1,b2,x[1],12,-389564586);b2=ff(b2,b3,a,b1,x[2],17,606105819);b1=ff(b1,b2,b3,a,x[3],22,-1044525330);
-      a=ff(a,b1,b2,b3,x[4],7,-176418897);b3=ff(b3,a,b1,b2,x[5],12,1200080426);b2=ff(b2,b3,a,b1,x[6],17,-1473231341);b1=ff(b1,b2,b3,a,x[7],22,-45705983);
-      a=ff(a,b1,b2,b3,x[8],7,1770035416);b3=ff(b3,a,b1,b2,x[9],12,-1958414417);b2=ff(b2,b3,a,b1,x[10],17,-42063);b1=ff(b1,b2,b3,a,x[11],22,-1990404162);
-      a=ff(a,b1,b2,b3,x[12],7,1804603682);b3=ff(b3,a,b1,b2,x[13],12,-40341101);b2=ff(b2,b3,a,b1,x[14],17,-1502002290);b1=ff(b1,b2,b3,a,x[15],22,1236535329);
-      a=gg(a,b1,b2,b3,x[1],5,-165796510);b3=gg(b3,a,b1,b2,x[6],9,-1069501632);b2=gg(b2,b3,a,b1,x[11],14,643717713);b1=gg(b1,b2,b3,a,x[0],20,-373897302);
-      a=gg(a,b1,b2,b3,x[5],5,-701558691);b3=gg(b3,a,b1,b2,x[10],9,38016083);b2=gg(b2,b3,a,b1,x[15],14,-660478335);b1=gg(b1,b2,b3,a,x[4],20,-405537848);
-      a=gg(a,b1,b2,b3,x[9],5,568446438);b3=gg(b3,a,b1,b2,x[14],9,-1019803690);b2=gg(b2,b3,a,b1,x[3],14,-187363961);b1=gg(b1,b2,b3,a,x[8],20,1163531501);
-      a=gg(a,b1,b2,b3,x[13],5,-1444681467);b3=gg(b3,a,b1,b2,x[2],9,-51403784);b2=gg(b2,b3,a,b1,x[7],14,1735328473);b1=gg(b1,b2,b3,a,x[12],20,-1926607734);
-      a=hh(a,b1,b2,b3,x[5],4,-378558);b3=hh(b3,a,b1,b2,x[8],11,-2022574463);b2=hh(b2,b3,a,b1,x[11],16,1839030562);b1=hh(b1,b2,b3,a,x[14],23,-35309556);
-      a=hh(a,b1,b2,b3,x[1],4,-1530992060);b3=hh(b3,a,b1,b2,x[4],11,1272893353);b2=hh(b2,b3,a,b1,x[7],16,-155497632);b1=hh(b1,b2,b3,a,x[10],23,-1094730640);
-      a=hh(a,b1,b2,b3,x[13],4,681279174);b3=hh(b3,a,b1,b2,x[0],11,-358537222);b2=hh(b2,b3,a,b1,x[3],16,-722521979);b1=hh(b1,b2,b3,a,x[6],23,76029189);
-      a=hh(a,b1,b2,b3,x[9],4,-640364487);b3=hh(b3,a,b1,b2,x[12],11,-421815835);b2=hh(b2,b3,a,b1,x[15],16,530742520);b1=hh(b1,b2,b3,a,x[2],23,-995338651);
-      a=ii(a,b1,b2,b3,x[0],6,-198630844);b3=ii(b3,a,b1,b2,x[7],10,1126891415);b2=ii(b2,b3,a,b1,x[14],15,-1416354905);b1=ii(b1,b2,b3,a,x[5],21,-57434055);
-      a=ii(a,b1,b2,b3,x[12],6,1700485571);b3=ii(b3,a,b1,b2,x[3],10,-1894986606);b2=ii(b2,b3,a,b1,x[10],15,-1051523);b1=ii(b1,b2,b3,a,x[1],21,-2054922799);
-      a=ii(a,b1,b2,b3,x[8],6,1873313359);b3=ii(b3,a,b1,b2,x[15],10,-30611744);b2=ii(b2,b3,a,b1,x[6],15,-1560198380);b1=ii(b1,b2,b3,a,x[13],21,1309151649);
-      a=ii(a,b1,b2,b3,x[4],6,-145523070);b3=ii(b3,a,b1,b2,x[11],10,-1120210379);b2=ii(b2,b3,a,b1,x[2],15,718787259);b1=ii(b1,b2,b3,a,x[9],21,-343485551);
-      a=q(a,olda);b1=q(b1,oldb);b2=q(b2,oldc);b3=q(b3,oldd);
+    function rol(value, shift) { return (value << shift) | (value >>> (32 - shift)); }
+    function wordHex(value) {
+      var out = '';
+      for (var i = 0; i < 4; i++) out += ('0' + ((value >>> (i * 8)) & 255).toString(16)).slice(-2);
+      return out;
     }
-    function hex(v){var s='';for(var i=0;i<4;i++)s+=('0'+(v>>(i*8+4)&0x0F).toString(16)).slice(-2)+('0'+(v>>(i*8)&0x0F).toString(16)).slice(-2);return s;}
-    return hex(a)+hex(b1)+hex(b2)+hex(b3);
+
+    // MD5 works on UTF-8 bytes, then appends 0x80 and the original bit length.
+    var utf8 = unescape(encodeURIComponent(input));
+    var bytes = [];
+    for (var i = 0; i < utf8.length; i++) bytes.push(utf8.charCodeAt(i));
+    var bitLengthLow = (bytes.length << 3) >>> 0;
+    var bitLengthHigh = (bytes.length >>> 29) >>> 0;
+    bytes.push(0x80);
+    while ((bytes.length % 64) !== 56) bytes.push(0);
+    for (i = 0; i < 4; i++) bytes.push((bitLengthLow >>> (i * 8)) & 255);
+    for (i = 0; i < 4; i++) bytes.push((bitLengthHigh >>> (i * 8)) & 255);
+
+    var shifts = [
+      7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+      5,9,14,20, 5,9,14,20, 5,9,14,20, 5,9,14,20,
+      4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+      6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
+    ];
+    var constants = [];
+    for (i = 0; i < 64; i++) constants[i] = (Math.abs(Math.sin(i + 1)) * 4294967296) | 0;
+    var a0 = 0x67452301, b0 = 0xefcdab89 | 0, c0 = 0x98badcfe | 0, d0 = 0x10325476;
+
+    for (var offset = 0; offset < bytes.length; offset += 64) {
+      var words = [];
+      for (i = 0; i < 16; i++) {
+        var at = offset + i * 4;
+        words[i] = bytes[at] | (bytes[at+1] << 8) | (bytes[at+2] << 16) | (bytes[at+3] << 24);
+      }
+      var a = a0, b = b0, c = c0, d = d0;
+      for (i = 0; i < 64; i++) {
+        var f, g;
+        if (i < 16) { f = (b & c) | ((~b) & d); g = i; }
+        else if (i < 32) { f = (d & b) | ((~d) & c); g = (5 * i + 1) % 16; }
+        else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) % 16; }
+        else { f = c ^ (b | (~d)); g = (7 * i) % 16; }
+        var oldD = d;
+        d = c;
+        c = b;
+        b = add(b, rol(add(add(a, f), add(constants[i], words[g])), shifts[i]));
+        a = oldD;
+      }
+      a0 = add(a0, a); b0 = add(b0, b); c0 = add(c0, c); d0 = add(d0, d);
+    }
+    return wordHex(a0) + wordHex(b0) + wordHex(c0) + wordHex(d0);
   }
 
   // ─── RSA Encrypt ───────────────────────────────────
-  function pemToArrayBuffer(pem) {
-    var b64 = pem.replace(/-----.*?-----/g,'').replace(/\s/g,'');
-    var bin = atob(b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-    return bytes.buffer;
-  }
-
   async function rsaEncrypt(plaintext) {
-    try {
-      // Try Web Crypto API (Android 5.0+)
-      var keyData = pemToArrayBuffer(
-        '-----BEGIN PUBLIC KEY-----\n' + CONFIG.RSA_PUBKEY + '\n-----END PUBLIC KEY-----');
-      var key = await crypto.subtle.importKey('spki', keyData,
-        {name:'RSA-OAEP',hash:'SHA-256'}, false, ['encrypt']);
-      var encoded = new TextEncoder().encode(plaintext);
-      var encrypted = await crypto.subtle.encrypt({name:'RSA-OAEP',hash:'SHA-256'}, key, encoded);
-      return btoa(String.fromCharCode.apply(null, new Uint8Array(encrypted)));
-    } catch(e) {
-      // Fallback: use PKCS1v15
-      var keyData = pemToArrayBuffer(
-        '-----BEGIN PUBLIC KEY-----\n' + CONFIG.RSA_PUBKEY + '\n-----END PUBLIC KEY-----');
-      var key = await crypto.subtle.importKey('spki', keyData,
-        {name:'RSA-PKCS1-v1_5',hash:'SHA-1'}, false, ['encrypt']);
-      var encoded = new TextEncoder().encode(plaintext);
-      var encrypted = await crypto.subtle.encrypt('RSA-PKCS1-v1_5', key, encoded);
-      return btoa(String.fromCharCode.apply(null, new Uint8Array(encrypted)));
+    if (global.android && typeof global.android.rsaEncryptPkcs1 === 'function') {
+      var encrypted = global.android.rsaEncryptPkcs1(CONFIG.RSA_PUBKEY, plaintext);
+      if (!encrypted) throw new Error('native RSA encryption failed');
+      return encrypted;
     }
+    throw new Error('RSA/PKCS1 bridge is unavailable');
   }
 
   // ─── HTTP ──────────────────────────────────────────
+  function nativeResponse(raw) {
+    var value = JSON.parse(raw || '{}');
+    if (value.error) throw new Error(value.error);
+    return {body: value.body || '', status: Number(value.status || 0)};
+  }
+
   async function httpGet(url, timeout) {
     timeout = timeout || 8000;
+    var headers = {
+      'Accept': '*/*',
+      'User-Agent': 'Dalvik/2.1.0',
+      'X-Forwarded-For': randomXF(),
+      'X-Real-IP': randomXF()
+    };
+    if (global.android && typeof global.android.httpGet === 'function') {
+      return nativeResponse(global.android.httpGet(url, JSON.stringify(headers), timeout));
+    }
     return new Promise(function(resolve, reject) {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       xhr.timeout = timeout;
-      xhr.setRequestHeader('Accept', '*/*');
-      xhr.setRequestHeader('User-Agent', 'Dalvik/2.1.0');
-      xhr.setRequestHeader('X-Forwarded-For', randomXF());
-      xhr.setRequestHeader('X-Real-IP', randomXF());
       xhr.onload = function() { resolve({body:xhr.responseText, status:xhr.status}); };
       xhr.onerror = function() { reject(new Error('network error')); };
       xhr.ontimeout = function() { reject(new Error('timeout')); };
@@ -132,12 +136,15 @@
 
   async function httpPost(url, body, timeout) {
     timeout = timeout || 8000;
+    var headers = {'Content-Type':'application/json', 'Accept':'*/*', 'User-Agent':'Dalvik/2.1.0'};
+    if (global.android && typeof global.android.httpPost === 'function') {
+      return nativeResponse(global.android.httpPost(url, body, JSON.stringify(headers), timeout));
+    }
     return new Promise(function(resolve, reject) {
       var xhr = new XMLHttpRequest();
       xhr.open('POST', url, true);
       xhr.timeout = timeout;
       xhr.setRequestHeader('Content-Type', 'application/json');
-      xhr.setRequestHeader('Accept', '*/*');
       xhr.onload = function() { resolve({body:xhr.responseText, status:xhr.status}); };
       xhr.onerror = function() { reject(new Error('network error')); };
       xhr.ontimeout = function() { reject(new Error('timeout')); };
@@ -218,19 +225,20 @@
     },
 
     // 3. Get Song Download URL
-    getSongUrl: async function(musicno) {
+    getSongUrl: async function(musicno, resolution, h265) {
+      resolution = resolution || '720';
+      h265 = !!h265;
       var self = this;
-      if (!self.token) {
-        if (!(await self.getToken())) return null;
-      }
       for (var att = 0; att < 3; att++) {
         try {
+          // token 过期重试时也要在下一轮重新获取，不能带空 token 继续请求。
+          if (!self.token && !(await self.getToken())) return null;
           var ts = Math.floor(Date.now() / 1000);
           var params = 'appid=' + CONFIG.APP_ID +
             '&device=' + self.mac + '_' + self.sn +
-            '&ish265=0&ls=1' +
-            '&musicno=' + musicno +
-            '&resolution=720' +
+            '&ish265=' + (h265 ? '1' : '0') + '&ls=1' +
+            '&musicno=' + encodeURIComponent(musicno) +
+            '&resolution=' + encodeURIComponent(resolution) +
             '&sn=' + self.sn +
             '&time=' + ts +
             '&token=' + self.token;
@@ -273,6 +281,7 @@
   // ─── 导出 ──────────────────────────────────────────
   global.KtvApi = KtvApi;
   global.KtvApiConfig = CONFIG;
+  global.KtvBridgeApiVersion = 2;
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {KtvApi: KtvApi, CONFIG: CONFIG};

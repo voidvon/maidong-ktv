@@ -148,6 +148,9 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var remoteStateVersion = 1L
     private val remoteSongCache = Collections.synchronizedMap(LinkedHashMap<String, Song>())
     private var mobileQrOverlay: View? = null
+    private var fullScreenQrOverlay: View? = null
+    private var updateCheckStarted = false
+    private var compactUi = false
     private val remoteNetworkMonitor = object : Runnable {
         override fun run() {
             val ip = localIp().takeIf { LocalRemoteServer.isPrivateIpv4(it) }
@@ -155,6 +158,7 @@ class MainActivity : AppCompatActivity() {
                 remoteServer.stop()
                 startRemoteServer()
                 updateMobileQrOverlay()
+                updateFullScreenQrOverlay()
             }
             main.postDelayed(this, 5000)
         }
@@ -376,6 +380,7 @@ class MainActivity : AppCompatActivity() {
         )
         // 使用新的横屏TV布局
         setContentView(R.layout.activity_main)
+        applyResponsiveLayout()
         if (!hasStoragePermission()) {
             requestStorage()
             return
@@ -427,9 +432,9 @@ class MainActivity : AppCompatActivity() {
             updateBottomBar(restoredSong, true)
         }
         // Keep initialization on the loading state until the external catalog is ready.
+        SongApiClient.init(this)  // 主线程初始化 JS Bridge
         showDatabaseLoading(true, "正在初始化曲库...", null)
         io.execute(Runnable {
-            // Check remote manifest for a newer database version
             val remoteVersion = DatabaseBootstrapper.fetchRemoteVersion()
             val localVersion = DatabaseBootstrapper.getLocalDbVersion()
             if (remoteVersion != null && remoteVersion != localVersion) {
@@ -479,6 +484,12 @@ class MainActivity : AppCompatActivity() {
         updateMobileQrOverlay()
         main.postDelayed(remoteNetworkMonitor, 5000)
         main.post(lyricTicker)
+        main.postDelayed({ checkAppUpdate(false) }, 2500L)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppUpdateManager.resumePendingInstall(this)
     }
 
     override fun onDestroy() {
@@ -497,6 +508,137 @@ class MainActivity : AppCompatActivity() {
         runCatching { stateIo.awaitTermination(2, TimeUnit.SECONDS) }
         if (::stateDatabase.isInitialized) stateDatabase.close()
     }
+
+    private fun checkAppUpdate(manual: Boolean) {
+        if (updateCheckStarted) return
+        updateCheckStarted = true
+        if (manual) toast("正在检查更新...")
+        AppUpdateManager.check(BuildConfig.VERSION_NAME) { result ->
+            main.post {
+                updateCheckStarted = false
+                result.onSuccess { release ->
+                    if (release == null) {
+                        if (manual) toast("当前已是最新版本 ${BuildConfig.VERSION_NAME}")
+                    } else {
+                        showAppUpdateDialog(release)
+                    }
+                }.onFailure { error ->
+                    Log.w(TAG, "Update check failed", error)
+                    if (manual) toast(error.message ?: "检查更新失败")
+                }
+            }
+        }
+    }
+
+    private fun showAppUpdateDialog(release: AppUpdateManager.Release) {
+        val notes = release.notes.trim().ifBlank { "发现新版本，建议立即更新。" }
+        AlertDialog.Builder(this)
+            .setTitle("发现新版本 ${release.version}")
+            .setMessage("${release.title}\n\n$notes")
+            .setNegativeButton("稍后", null)
+            .setPositiveButton("下载并安装") { _, _ -> downloadAppUpdate(release) }
+            .create().showForTv(DialogInterface.BUTTON_POSITIVE)
+    }
+
+    private fun downloadAppUpdate(release: AppUpdateManager.Release) {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(18), dp(24), dp(12))
+        }
+        val value = label("正在下载 ${release.apkName}…", 16, Color.WHITE).apply { gravity = Gravity.CENTER }
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply { max = 100 }
+        box.addView(value, LinearLayout.LayoutParams(-1, dp(44)))
+        box.addView(bar, LinearLayout.LayoutParams(-1, dp(24)))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("应用更新")
+            .setView(box)
+            .setNegativeButton("后台下载", null)
+            .create()
+        dialog.showForTv()
+        AppUpdateManager.download(this, release, { progress ->
+            main.post {
+                bar.progress = progress
+                value.text = "正在下载 ${release.apkName}… $progress%"
+            }
+        }) { result ->
+            main.post {
+                dialog.dismiss()
+                result.onSuccess { apk ->
+                    AlertDialog.Builder(this)
+                        .setTitle("下载完成")
+                        .setMessage("版本 ${release.version} 已下载，是否现在安装？")
+                        .setNegativeButton("稍后", null)
+                        .setPositiveButton("安装") { _, _ -> AppUpdateManager.install(this, apk) }
+                        .create().showForTv(DialogInterface.BUTTON_POSITIVE)
+                }.onFailure { error ->
+                    AlertDialog.Builder(this).setTitle("更新失败")
+                        .setMessage(error.message ?: "下载安装包失败")
+                        .setPositiveButton("确定", null).show()
+                }
+            }
+        }
+    }
+
+    /**
+     * XML 保留电视端的大触控/遥控焦点尺寸；窄屏横屏设备在运行时切换紧凑尺寸。
+     * 平板及电视继续使用原始布局，手机不会再因固定 370dp 左栏和顶部按钮而溢出。
+     */
+    private fun applyResponsiveLayout() {
+        val config = resources.configuration
+        compactUi = config.screenWidthDp < 1000 || config.screenHeightDp < 600
+        if (!compactUi) return
+        val widthDp = config.screenWidthDp.coerceAtLeast(480)
+        val barHeight = dp(52)
+        findViewById<ViewGroup?>(R.id.top_bar)?.apply {
+            layoutParams = layoutParams.apply { height = barHeight }
+            setPadding(dp(10), 0, dp(8), 0)
+        }
+        findViewById<ViewGroup?>(R.id.bottom_bar)?.apply {
+            layoutParams = layoutParams.apply { height = barHeight }
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        findViewById<View?>(R.id.text_logo)?.layoutParams =
+            findViewById<View>(R.id.text_logo).layoutParams.apply { width = dp(34); height = dp(34) }
+        findViewById<TextView?>(R.id.top_brand_name)?.apply { textSize = 16f }
+        if (widthDp < 760) {
+            findViewById<View?>(R.id.top_brand_name)?.visibility = View.GONE
+            findViewById<View?>(R.id.btn_top_search)?.visibility = View.GONE
+        }
+        listOf(
+            R.id.btn_top_search, R.id.text_top_order_label, R.id.btn_top_vocal,
+            R.id.btn_top_next, R.id.btn_top_pause, R.id.btn_top_replay, R.id.btn_top_tone,
+        ).forEach { id ->
+            findViewById<TextView?>(id)?.apply {
+                textSize = 11f
+                setPadding(dp(5), paddingTop, dp(6), paddingBottom)
+            }
+        }
+        findViewById<FrameLayout?>(R.id.content_frame)?.let { frame ->
+            (frame.layoutParams as? FrameLayout.LayoutParams)?.apply {
+                topMargin = barHeight
+                bottomMargin = barHeight
+                frame.layoutParams = this
+            }
+        }
+        findViewById<LinearLayout?>(R.id.main_layout)?.setPadding(dp(12), dp(10), dp(12), dp(8))
+        findViewById<LinearLayout?>(R.id.home_layout)?.setPadding(dp(12), dp(10), dp(12), dp(8))
+        findViewById<LinearLayout?>(R.id.left_column)?.let { left ->
+            val desiredWidthDp = (widthDp * 0.34f).toInt().coerceIn(230, 340)
+            left.layoutParams = left.layoutParams.apply { width = dp(desiredWidthDp) }
+            findViewById<View?>(R.id.player_container)?.layoutParams =
+                findViewById<View>(R.id.player_container).layoutParams.apply {
+                    height = dp((desiredWidthDp * 9f / 16f).toInt())
+                }
+        }
+        listOf(
+            R.id.home_card_regular, R.id.home_card_favorite, R.id.home_card_category,
+            R.id.home_card_rank, R.id.home_card_song, R.id.home_card_singer, R.id.home_card_local,
+        ).forEach { id ->
+            findViewById<TextView?>(id)?.apply { textSize = 15f; setPadding(dp(8), dp(8), dp(8), dp(8)) }
+        }
+    }
+
+    private fun chromeBarHeight(): Int = dp(if (compactUi) 52 else 64)
 
     private fun buildShell() {
         val root = FrameLayout(this)
@@ -1996,6 +2138,7 @@ class MainActivity : AppCompatActivity() {
         isFullScreen = true
         fullScreenContainer!!.setVisibility(View.VISIBLE)
         expandPlayerToFullScreen()
+        updateFullScreenQrOverlay()
         setFullScreenChromeVisible(true)
         updateFullScreenProgress()
     }
@@ -2022,6 +2165,7 @@ class MainActivity : AppCompatActivity() {
         fullScreenSeeking = false
         fullScreenControls = null
         fullScreenProgressRow = null
+        fullScreenQrOverlay = null
         fullScreenChromeVisible = false
         main.removeCallbacks(hideFullScreenChromeRunnable)
     }
@@ -2688,6 +2832,7 @@ class MainActivity : AppCompatActivity() {
         remoteServer.stop()
         startRemoteServer()
         updateMobileQrOverlay()
+        updateFullScreenQrOverlay()
         main.postDelayed({ showMobileRemoteDialog() }, 180)
     }
 
@@ -2721,6 +2866,44 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(box, params)
         mobileQrOverlay = box
+    }
+
+    /** 全屏播放时固定显示在右上角的小型手机点歌二维码。 */
+    private fun updateFullScreenQrOverlay() {
+        val container = fullScreenContainer ?: return
+        fullScreenQrOverlay?.let { container.removeView(it) }
+        fullScreenQrOverlay = null
+        if (!isFullScreen) return
+        val url = remoteUrl()
+        if (url.isBlank()) return
+        val qrSize = dp(if (compactUi) 68 else 84)
+        val totalWidth = dp(if (compactUi) 78 else 96)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(4), dp(4), dp(3))
+            setBackgroundColor(Color.argb(218, 255, 255, 255))
+            elevation = dp(12).toFloat()
+            addView(ImageView(this@MainActivity).apply {
+                setImageBitmap(qrBitmap(url, qrSize))
+                contentDescription = "扫码手机点歌"
+            }, LinearLayout.LayoutParams(qrSize, qrSize))
+            addView(TextView(this@MainActivity).apply {
+                text = "扫码点歌"
+                textSize = if (compactUi) 9f else 10f
+                gravity = Gravity.CENTER
+                setTextColor(Color.rgb(59, 18, 92))
+                includeFontPadding = false
+            }, LinearLayout.LayoutParams(-1, dp(if (compactUi) 16 else 18)))
+            setOnClickListener { showMobileRemoteDialog() }
+        }
+        val params = FrameLayout.LayoutParams(totalWidth, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.TOP).apply {
+            topMargin = dp(8)
+            rightMargin = dp(10)
+        }
+        container.addView(box, params)
+        box.bringToFront()
+        fullScreenQrOverlay = box
     }
 
     private fun showMobileRemoteSettings() {
@@ -4241,6 +4424,8 @@ class MainActivity : AppCompatActivity() {
                 "playLocalFile song=${stableId(song)} generation=$playbackGeneration " +
                     "startPositionMs=$startPositionMs path=${f.absolutePath} size=${f.length()}",
             )
+            // 自动清理以文件时间作为最近使用时间；每次实际播放都刷新，避免常唱歌曲被误删。
+            runCatching { f.setLastModified(System.currentTimeMillis()) }
             player!!.stopPlayback()
             setupPlayerListeners(song, startPositionMs, playbackGeneration)
             player!!.setVideoURI(Uri.fromFile(f))
@@ -4591,6 +4776,7 @@ class MainActivity : AppCompatActivity() {
                         switchToLocalPlayback(song)
                     }
                 })
+                enforceStorageReserve()
             }
 
             override fun onDownloadFailed(song: Song, error: String) {
@@ -6038,7 +6224,7 @@ class MainActivity : AppCompatActivity() {
         topBrandName?.visibility = View.VISIBLE
         btnTopSearch?.visibility = View.VISIBLE
         bottomBar?.visibility = View.VISIBLE
-        updateContentFrameMargins(dp(64), dp(64))
+        updateContentFrameMargins(chromeBarHeight(), chromeBarHeight())
         if (homeLayout != null) homeLayout!!.setVisibility(View.VISIBLE)
         configureTvFocusNavigation()
         movePlayerToHost(homePlayerHost)
@@ -7464,12 +7650,19 @@ class MainActivity : AppCompatActivity() {
                 },
             )
             1 -> listOf(
+                SettingsEntry(R.drawable.ott_ic_data_upgrade, "应用更新", "当前版本 ${BuildConfig.VERSION_NAME}，更新来源：Gitee Release", "检查更新") {
+                    checkAppUpdate(true)
+                },
                 SettingsEntry(R.drawable.ott_ic_data_upgrade, "曲库", "数据库 ${library.muse.songCount()} 首  本地已下载 ${countDownloadedFiles()} 首", "更新") {
                     io.execute { library.muse.close(); library.muse.open(); main.post { showSettingsSection(1, false) } }
                 },
                 SettingsEntry(R.drawable.ott_ic_data_setting, "U盘加歌", "扫描U盘内按规定命名的歌曲文件，并添加到曲库中", "立即加歌") { toast("未检测到U盘") },
                 SettingsEntry(R.drawable.ott_ic_setting_storage_space, "预留存储空间", "当前 ${String.format(Locale.ROOT, "%.1f", reserveStorageGb)} GB") { showReserveStorageDialog() },
-                SettingsEntry(R.drawable.ott_ic_data_reset, "自动删歌", "当剩余存储空间低于预留空间时，自动删除冷门歌曲", action = { autoDeleteSongs = !autoDeleteSongs; saveState() }, checked = autoDeleteSongs),
+                SettingsEntry(R.drawable.ott_ic_data_reset, "自动删歌", "当剩余存储空间低于预留空间时，自动删除最久未使用的歌曲", action = {
+                    autoDeleteSongs = !autoDeleteSongs
+                    saveState()
+                    if (autoDeleteSongs) enforceStorageReserve(showResult = true)
+                }, checked = autoDeleteSongs),
                 SettingsEntry(R.drawable.ott_ic_data_upgrade, "重置数据库", "删除本地数据库并重新下载", "重置") { confirmResetDatabase() },
                 SettingsEntry(R.drawable.ott_ic_setting_storage_space, "硬盘读写权限") { toast(storageStatusText()) },
             )
@@ -7564,28 +7757,46 @@ class MainActivity : AppCompatActivity() {
 
     private fun isBelowReservedStorage(): Boolean {
         val required = (reserveStorageGb * 1024.0 * 1024.0 * 1024.0).toLong()
-        return Environment.getExternalStorageDirectory().usableSpace < required
+        return downloadedSongDirectory().usableSpace < required
     }
 
-    private fun purgeColdDownloadedFiles() {
+    private fun enforceStorageReserve(showResult: Boolean = false) {
+        if (!autoDeleteSongs || !isBelowReservedStorage()) return
+        io.execute {
+            val deleted = purgeColdDownloadedFiles()
+            val enough = !isBelowReservedStorage()
+            if (showResult) main.post {
+                toast(
+                    if (enough) "已清理 $deleted 首歌曲，预留空间已恢复"
+                    else "已清理 $deleted 首歌曲，受保护歌曲不会被删除，空间仍不足",
+                )
+                if (browseMode == "settings_section") showSettingsSection(1, false)
+            }
+        }
+    }
+
+    private fun purgeColdDownloadedFiles(): Int {
         val required = (reserveStorageGb * 1024.0 * 1024.0 * 1024.0).toLong()
         val protectedNames = buildSet {
             currentSong?.filename?.let(::add)
             orderQueue.orEmpty().mapNotNullTo(this) { it.filename }
         }
+        var deletedCount = 0
         downloadedSongDirectory().listFiles().orEmpty()
             .filter { it.isFile && it.name !in protectedNames && !it.name.endsWith(".download") }
-            .sortedBy(File::lastModified)
+            .sortedWith(compareBy<File> { it.lastModified() }.thenBy { it.name })
             .forEach { file ->
-                if (Environment.getExternalStorageDirectory().usableSpace >= required) return
+                if (downloadedSongDirectory().usableSpace >= required) return deletedCount
                 cleanupSidecars(file)
                 if (file.delete()) {
+                    deletedCount++
                     library.allSongs().filter { it.filename == file.name }.forEach { song ->
                         song.path = null
                         runCatching { stateDatabase.removeDownload(song) }
                     }
                 }
             }
+        return deletedCount
     }
 
     private fun confirmResetDatabase() {
@@ -7769,16 +7980,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showReserveStorageDialog() {
-        val input = EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
-            setText(String.format(Locale.ROOT, "%.1f", reserveStorageGb))
-            hint = "GB"
-        }
+        val totalGb = downloadedSongDirectory().totalSpace.toDouble() / 1024.0 / 1024.0 / 1024.0
+        val values = listOf(0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
+            .filter { it <= max(0.5, totalGb * 0.95) }
+            .ifEmpty { listOf(0.5) }
+        val labels = values.map { value ->
+            "${String.format(Locale.ROOT, if (value < 1) "%.1f" else "%.0f", value)} GB"
+        }.toTypedArray()
+        var selected = values.indices.minByOrNull { kotlin.math.abs(values[it] - reserveStorageGb) } ?: 0
         AlertDialog.Builder(this).setTitle("预留存储空间")
-            .setMessage("当点歌机可用存储空间不足时，请打开自动删歌按钮，我们将自动删除部分本地冷门歌曲，腾出空间。\n\n设置范围：0.5 GB - 62.92 GB")
-            .setView(input).setNegativeButton("关闭", null).setPositiveButton("确认") { _, _ ->
-                reserveStorageGb = input.text.toString().toDoubleOrNull()?.coerceIn(0.5, 62.92) ?: reserveStorageGb
+            .setSingleChoiceItems(labels, selected) { _, which -> selected = which }
+            .setNegativeButton("取消", null).setPositiveButton("保存") { _, _ ->
+                reserveStorageGb = values[selected]
                 saveState()
+                if (autoDeleteSongs) enforceStorageReserve(showResult = true)
                 showSettingsSection(1, false)
             }.create().showForTv()
     }
