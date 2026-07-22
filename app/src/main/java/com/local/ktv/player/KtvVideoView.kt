@@ -103,7 +103,6 @@ private class KtvSurfaceView(context: Context) : SurfaceView(context) {
 class KtvPlaybackEngine(context: Context) {
     private companion object {
         const val TAG = "KtvPlaybackEngine"
-        const val FFP_PROP_FLOAT_PLAYBACK_PITCH = 10008
     }
 
     private var ijkPlayer: IjkMediaPlayer? = null
@@ -248,13 +247,7 @@ class KtvPlaybackEngine(context: Context) {
     private fun applyTone(player: IjkMediaPlayer) {
         val pitch = 1.0f + toneStep * 0.08f
         runCatching {
-            val method = IjkMediaPlayer::class.java.getDeclaredMethod(
-                "_setPropertyFloat",
-                Int::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-            )
-            method.isAccessible = true
-            method.invoke(player, FFP_PROP_FLOAT_PLAYBACK_PITCH, pitch)
+            player.setPitch(pitch)
             Log.i(TAG, "tone step=$toneStep pitch=$pitch")
         }.onFailure { Log.e(TAG, "Cannot apply tone step=$toneStep", it) }
     }
@@ -282,7 +275,7 @@ class KtvPlaybackEngine(context: Context) {
         if (ijk != null) {
             runCatching {
                 ijk.setVolume(safeVolume, safeVolume)
-                ijk.seletcAudioChannel(channel)
+                ijk.selectAudioChannel(channel)
                 Log.i(TAG, "audio channel=$channel volume=$safeVolume")
             }.onFailure { Log.e(TAG, "Cannot select audio channel=$channel", it) }
             return

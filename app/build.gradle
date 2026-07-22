@@ -85,7 +85,7 @@ configurations.all {
 }
 
 dependencies {
-    implementation files('libs/original-ijk-runtime.jar')
+    implementation files('libs/ijkplayer-0.8.9-android15-ktv.1.aar')
     implementation "androidx.core:core:1.12.0"
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.zxing:core:3.5.3"
