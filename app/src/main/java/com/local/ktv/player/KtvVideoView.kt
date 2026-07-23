@@ -194,6 +194,9 @@ class KtvPlaybackEngine(context: Context) {
 
     private fun prepareIjkPlayer(player: IjkMediaPlayer, uri: Uri) {
         player.reset()
+        // A reused native player must never inherit a transient playback rate
+        // from the previous item. KTV playback has no variable-speed mode.
+        player.setSpeed(1.0f)
         configure(player)
         targetView?.currentHolder()?.takeIf { it.surface?.isValid == true }?.let(player::setDisplay)
         val source = if (uri.scheme.equals("file", true)) uri.path.orEmpty() else uri.toString()
@@ -267,7 +270,16 @@ class KtvPlaybackEngine(context: Context) {
             val targetTrack = if (original) audioTracks[0] else audioTracks[1]
             val selectedTrack = ijk.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO)
             if (selectedTrack != targetTrack) {
+                // IJK opens the replacement audio decoder at the demuxer's
+                // current read position. Seeking the whole media back to the
+                // rendered position flushes both queues and realigns the new
+                // audio clock; otherwise video can run at zero delay while it
+                // catches up with an audio clock that started several seconds
+                // ahead.
+                val playbackPosition = ijk.currentPosition.coerceAtLeast(0L)
                 ijk.selectTrack(targetTrack)
+                ijk.seekTo(playbackPosition)
+                Log.i(TAG, "audio track realigned position=$playbackPosition")
             }
             Log.i(
                 TAG,
